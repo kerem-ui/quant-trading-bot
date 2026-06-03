@@ -1,0 +1,16 @@
+{
+  "_comment": "Copy to risk_config.json and edit. Conservative research defaults. Mirrors strategy_configs.json risk block.",
+  "portfolio_vol_target_annual": 0.10,
+  "max_gross_exposure": 1.50,
+  "max_net_exposure": 1.00,
+  "max_single_symbol_weight": 0.15,
+  "max_asset_class_weight": 0.40,
+  "max_daily_loss_reduce_risk": 0.02,
+  "risk_reduction_factor_on_daily_loss": 0.5,
+  "max_portfolio_drawdown_kill_switch": 0.20,
+  "max_strategy_drawdown_pause": 0.12,
+  "vol_spike_kill_multiple": 2.5,
+  "vol_spike_lookback": 60,
+  "max_total_options_defined_loss": 0.08,
+  "max_defined_loss_per_options_trade": 0.01
+}

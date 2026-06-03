@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy to options_data_config.json and edit. V4 - historical data only, no live, no broker.",
+  "provider": "synthetic",
+  "underlyings": ["SPY", "QQQ"],
+  "default_dte_min": 7,
+  "default_dte_max": 60,
+  "quality_thresholds": {
+    "spread_max_pct": 0.25,
+    "dte_max_calendar_days": 1095,
+    "iv_min": 0.0001,
+    "iv_max": 5.0,
+    "allow_zero_volume": true,
+    "allow_zero_open_interest": true
+  },
+  "cache_root": "data/options",
+  "providers": {
+    "synthetic": {
+      "seed": 42,
+      "base_iv": 0.20,
+      "dtes": [30, 45, 60],
+      "rate": 0.03
+    },
+    "thetadata": {
+      "_note": "Local Theta Terminal v3 handles auth via creds.txt next to its jar. No env key required for localhost. For remote URLs, THETADATA_API_KEY is read from env (never inlined, never logged).",
+      "api_version": "v3",
+      "default_base_url": "http://127.0.0.1:25503",
+      "base_url_env": "THETADATA_BASE_URL",
+      "api_key_env": "THETADATA_API_KEY",
+      "rate_limit_seconds": 0.25,
+      "timeout_seconds": 30,
+      "use_local_terminal": true
+    }
+  }
+}

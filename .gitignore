@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Claude / local AI work
+.claude/
+
+# Secrets / credentials
+.env
+*.key
+*.pem
+credentials*
+secrets*
+config_private.py
+.env.local
+
+# Data - do not upload raw/proprietary data
+data/
+*.csv.gz
+*.parquet
+*.db
+*.sqlite
+
+# Large/local outputs
+outputs/
+logs/
+
+# Optional: keep reports out unless you want to publish them
+reports/_v*/
+reports/figures/
+reports/options/
+reports/company/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db

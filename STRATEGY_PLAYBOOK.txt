@@ -1,0 +1,1030 @@
+# Strategy Playbook - Detailed Testable Trading Systems
+
+This playbook converts the uploaded book ideas into implementation-ready strategy hypotheses. It is not financial advice and does not guarantee profitability. Every strategy must be backtested with realistic transaction costs, then validated out-of-sample and paper-traded.
+
+============================================================
+GLOBAL RULES FOR ALL STRATEGIES
+============================================================
+
+1. No live trading until the research bot passes:
+   - clean data validation
+   - no look-ahead bias checks
+   - transaction cost sensitivity
+   - walk-forward testing
+   - out-of-sample validation
+   - paper trading
+
+2. Every strategy must output:
+   - signal: -1, 0, +1 or continuous forecast
+   - confidence score
+   - expected holding period
+   - estimated transaction cost
+   - recommended position size
+   - risk contribution
+   - stop/exit reason
+
+3. Every backtest must include:
+   - commissions
+   - slippage
+   - bid/ask spread assumptions
+   - turnover
+   - max drawdown
+   - volatility
+   - Sharpe and Sortino
+   - hit rate
+   - average win/loss
+   - exposure by asset/sector/strategy
+   - stress periods
+
+4. Risk limits:
+   - max risk per trade: 0.25% to 1.00% of equity in research mode
+   - max strategy drawdown before pause: 10% to 15% depending on strategy
+   - max portfolio drawdown before kill switch: 15% to 20%
+   - max single-symbol exposure: 5% to 15% depending on liquidity and strategy
+   - max options-defined-risk position loss: known at entry; no undefined-risk options in v1
+
+5. Parameter philosophy:
+   - Use broad, robust parameter ranges.
+   - Do not overfit exact values.
+   - Test parameter stability across time, assets, and market regimes.
+
+============================================================
+S01 - MULTI-ASSET VOLATILITY-TARGETED TREND FOLLOWING
+============================================================
+
+## Objective
+Capture persistent directional trends across liquid assets while sizing positions by volatility and controlling drawdowns.
+
+## Market Logic
+Trends can persist because of delayed information diffusion, institutional flows, risk premia, behavioral biases, and macro cycles. This strategy is suitable for a systematic bot because rules are simple, data requirements are modest, and risk can be controlled through volatility targeting.
+
+## Instruments
+Preferred institutional universe:
+- Equity index futures
+- Treasury futures
+- FX futures
+- Commodity futures
+
+Retail/simpler universe:
+- SPY, QQQ, IWM, DIA
+- TLT, IEF
+- GLD, SLV
+- USO or commodity ETFs with caution
+- UUP/FX ETFs if needed
+
+## Data Required
+Minimum:
+- Daily OHLCV
+- Adjusted close
+- Trading calendar
+
+Better:
+- Futures continuous contracts
+- Contract roll dates
+- Front/next futures prices
+- Bid/ask or spread estimates
+
+## Features
+Compute:
+- returns_20d, returns_60d, returns_120d
+- EMA_50, EMA_200
+- realized_vol_20d, realized_vol_60d
+- ATR_14
+- rolling drawdown
+- rolling correlation matrix
+
+Trend score example:
+trend_score = 0.35 * zscore(return_20d) + 0.35 * zscore(return_60d) + 0.30 * zscore(return_120d)
+
+Alternative simple rule:
+- bullish if EMA_50 > EMA_200 and close > 100-day high breakout threshold
+- bearish if EMA_50 < EMA_200 and close < 100-day low breakout threshold
+
+## Entry Rules
+Long entry:
+- trend_score >= +1.0
+- realized_vol_20d is not above emergency threshold
+- expected edge estimate > 3 * estimated round-trip cost
+- portfolio exposure caps allow new position
+
+Short entry, if allowed:
+- trend_score <= -1.0
+- same risk and cost filters
+
+Long-only version:
+- long when trend_score >= +1.0
+- move to cash when trend_score < +0.25
+
+## Exit Rules
+Exit long if any is true:
+- trend_score < +0.25
+- close falls below EMA_50 for 3 consecutive sessions
+- trailing stop hit: close < highest_close_since_entry - 3 * ATR_14
+- strategy drawdown trigger active
+- expected edge no longer exceeds cost
+
+Exit short if inverse conditions are true.
+
+## Position Sizing
+Volatility-targeted sizing:
+position_weight_i = target_vol_per_asset / realized_vol_i
+
+Example:
+- portfolio annual vol target: 10%
+- max asset weight: 15%
+- max gross exposure: 150%
+- max net exposure: 100%
+- rebalance weekly
+
+Risk parity variant:
+- each active asset contributes equal ex-ante volatility
+- reduce positions when average pairwise correlation rises
+
+## Risk Controls
+- max per-asset weight: 10% to 15%
+- max asset-class exposure: 40%
+- max portfolio vol: 12% annualized in v1
+- max daily loss before reducing risk: 2%
+- max 20-day loss before pausing strategy: 6%
+- kill switch if realized volatility spikes above 2.5x median 60-day volatility
+
+## Transaction Cost / Execution
+- Daily strategy can assume next open or next close execution.
+- Include commissions and slippage.
+- Cost filter should prevent trading when trend is weak.
+- Rebalance weekly to reduce turnover.
+
+## Backtest Plan
+- Test 10+ years if possible.
+- Include crisis periods.
+- Compare daily, weekly, and monthly rebalance.
+- Test lookbacks: 20/60/120, 50/100/200, 55-day breakout.
+- Run sensitivity to slippage.
+- Report performance by asset class.
+
+## Failure Modes
+- Sideways/choppy markets cause whipsaw.
+- Sudden reversals after crowded trends.
+- ETF data may hide futures roll effects.
+- Commodity ETFs can decay due to roll structure.
+
+## Bot Pseudocode
+for each rebalance_date:
+    load adjusted OHLCV
+    compute trend_score and realized_vol
+    candidate_signals = sign(trend_score) where abs(trend_score) >= threshold
+    apply cost_filter
+    target_weights = vol_target(candidate_signals)
+    apply exposure_limits
+    generate_orders(current_weights, target_weights)
+
+## Implementation Priority
+High. Build first.
+
+============================================================
+S02 - CROSS-SECTIONAL EQUITY FACTOR BLEND
+============================================================
+
+## Objective
+Rank a liquid equity universe using multiple factors and build a diversified long/short or long-only portfolio.
+
+## Market Logic
+Persistent equity factors can reflect valuation effects, momentum, quality, profitability, investor underreaction, and risk premia. A blended model can reduce reliance on a single factor.
+
+## Instruments
+- US liquid equities
+- Initially S&P 500 or large/mid-cap universe
+- Avoid microcaps in v1
+
+## Data Required
+Minimum for price-only version:
+- Daily adjusted OHLCV
+- Market cap or liquidity filters
+
+Better for full version:
+- Fundamentals: book value, earnings, sales, cash flow, debt, profitability
+- Corporate actions
+- Sector/industry classification
+- Borrow availability and short borrow cost if long/short
+
+## Features
+Price-only factors:
+- 12-month momentum excluding most recent month
+- 3-month momentum
+- 1-month reversal
+- realized volatility
+- max drawdown
+- liquidity score
+
+Fundamental factors:
+- value: earnings yield, book-to-market, cash-flow yield
+- quality: profitability, return on equity, debt-to-equity
+- growth: revenue/earnings growth with valuation penalty
+- sentiment: analyst revisions if available
+
+Composite score:
+score = 0.30 * momentum_rank + 0.25 * value_rank + 0.20 * quality_rank + 0.15 * low_vol_rank + 0.10 * liquidity_rank
+
+If no fundamentals:
+score = 0.45 * momentum_rank + 0.25 * low_vol_rank + 0.20 * reversal_rank + 0.10 * liquidity_rank
+
+## Entry Rules
+Long/short version:
+- Long top 10% or top 20% by composite score.
+- Short bottom 10% or bottom 20% if borrow and shorting are realistic.
+- Use sector-neutral weighting if possible.
+
+Long-only version:
+- Buy top 25 to 50 ranked stocks.
+- Hold cash or broad ETF for the rest.
+
+## Exit Rules
+- Monthly rebalance.
+- Exit if stock drops below top 40% ranking for longs.
+- Exit shorts if stock rises above bottom 40% ranking.
+- Exit if liquidity falls below threshold.
+- Exit if corporate action creates data uncertainty.
+
+## Position Sizing
+Simple v1:
+- equal weight among selected names
+- cap single stock at 2% to 4%
+
+Better:
+- inverse volatility weighting
+- sector exposure caps
+- beta neutralization
+- optimizer with constraints
+
+Long/short limits:
+- gross exposure: 100% to 200%
+- net exposure: -10% to +10% for market neutral
+- beta target: near zero
+
+## Risk Controls
+- max single name: 2% in long/short, 4% in long-only
+- max sector: 20%
+- beta tolerance: +/- 0.05 for market neutral
+- max turnover monthly: 25% to 50%
+- stop trading names with abnormal data gaps or low volume
+
+## Transaction Cost / Execution
+- Use liquid universe only.
+- Rebalance monthly to reduce costs.
+- Apply spread/slippage by liquidity bucket.
+- Do not use illiquid small caps in v1.
+
+## Backtest Plan
+- Use survivorship-bias-free data if possible.
+- If using current S&P 500 only, label results as biased.
+- Separate price-only version from full fundamental version.
+- Test factor weights over time.
+- Run long-only and long/short versions separately.
+
+## Failure Modes
+- Factor crowding.
+- Regime shifts.
+- Survivorship bias.
+- Fundamental data restatement and point-in-time errors.
+- Short borrow costs ignored.
+
+## Bot Pseudocode
+monthly:
+    universe = liquidity_filter(equities)
+    features = compute_factor_features(universe)
+    ranks = cross_sectional_rank(features)
+    score = weighted_factor_score(ranks)
+    selected_longs = top_quantile(score)
+    selected_shorts = bottom_quantile(score)
+    target_weights = portfolio_constructor(score, risk_constraints)
+    orders = rebalance(current, target_weights)
+
+## Implementation Priority
+High, but use a price-only version first if fundamentals are unavailable.
+
+============================================================
+S03 - PAIRS / STATISTICAL ARBITRAGE MEAN REVERSION
+============================================================
+
+## Objective
+Trade temporary divergence between related instruments while staying market-neutral or near market-neutral.
+
+## Market Logic
+Related securities can temporarily diverge because of liquidity shocks, investor flows, or short-term overreaction. If the relationship is stable, the spread may mean-revert.
+
+## Instruments
+- Pairs within same sector: e.g., two large banks, two oil majors, two semiconductors.
+- ETF pairs: SPY/IVV, GLD/IAU, similar sector ETFs.
+- Avoid pairs with low liquidity or unstable fundamentals.
+
+## Data Required
+- Daily adjusted OHLCV
+- Sector classification
+- Optional: borrow costs for short leg
+
+## Pair Selection
+Candidate pair must pass:
+- same sector/industry
+- both liquid
+- rolling correlation > 0.70 over 252 days
+- cointegration p-value < 0.05 or stable hedge ratio
+- spread half-life between 3 and 30 trading days
+
+Spread calculation:
+- hedge_ratio = rolling OLS beta of A vs B
+- spread = price_A - hedge_ratio * price_B
+- z = (spread - rolling_mean(spread)) / rolling_std(spread)
+
+## Entry Rules
+Long spread:
+- z <= -2.0
+- pair passes current stability filters
+- market regime filter not in crash mode
+- borrow cost acceptable
+
+Short spread:
+- z >= +2.0
+- same filters
+
+## Exit Rules
+- exit when abs(z) <= 0.5
+- stop if abs(z) >= 3.5
+- stop if cointegration breaks
+- stop if pair correlation falls below 0.50
+- max holding period: 20 trading days
+
+## Position Sizing
+- dollar neutral or beta neutral
+- risk per pair: 0.25% to 0.50% of portfolio equity
+- max active pairs: 10 to 30 depending on capital
+- cap exposure to one sector
+
+## Risk Controls
+- no more than 2-3 pairs sharing the same security
+- sector exposure cap
+- stop if all pairs start correlating during market stress
+- reduce risk when market volatility spikes
+- avoid earnings announcements for single stocks unless explicitly tested
+
+## Transaction Cost / Execution
+- Use limit-order assumption or conservative next-open fills.
+- Include two-leg slippage.
+- Pair trades double transaction costs; cost filter is important.
+
+## Backtest Plan
+- Use walk-forward pair selection.
+- Do not select pairs using full-sample history.
+- Rebuild pair universe monthly or quarterly.
+- Test stability of thresholds z=1.5/2.0/2.5 and exits z=0/0.5/1.0.
+
+## Failure Modes
+- Relationship breaks permanently.
+- Both stocks move together during crisis.
+- Short leg hard to borrow.
+- Corporate events destroy pair logic.
+- Overfitting pair selection.
+
+## Bot Pseudocode
+monthly:
+    candidate_pairs = build_pairs(universe)
+    valid_pairs = filter_by_corr_cointegration_half_life(candidate_pairs)
+
+daily:
+    for pair in valid_pairs:
+        z = compute_spread_z(pair)
+        if no_position and z >= entry_z:
+            short_spread(pair)
+        if no_position and z <= -entry_z:
+            long_spread(pair)
+        if position and exit_or_stop_condition:
+            close_pair(pair)
+
+## Implementation Priority
+High. Good second strategy after trend following.
+
+============================================================
+S04 - CARRY / FUTURES TERM STRUCTURE STRATEGY
+============================================================
+
+## Objective
+Exploit the return component caused by futures curve shape, roll yield, and cost-of-carry relationships.
+
+## Market Logic
+Futures prices reflect spot price, financing, income/yield, storage, and convenience yield. Term structure can create a carry signal. Backwardation can reward long positions in some markets; contango can penalize long positions.
+
+## Instruments
+Best with futures data:
+- commodities
+- equity index futures
+- rates futures
+- FX futures
+
+Retail proxy:
+- ETF data is not enough for true carry, but can be used for rough testing.
+- For commodities, ETF returns often embed roll effects but may be structurally flawed.
+
+## Data Required
+- Futures chain: front, second, third contracts
+- Contract expiry dates
+- Roll schedule
+- Daily settlement prices
+- Spot price if available
+- Interest rates if doing theoretical carry
+
+## Features
+- front_price
+- next_price
+- annualized_carry = (front_price / next_price - 1) * (365 / days_between_expiries)
+- curve_slope_zscore
+- momentum filter
+- realized volatility
+- liquidity / open interest
+
+## Entry Rules
+Long carry setup:
+- curve is backwardated or carry signal positive
+- carry z-score >= +1.0
+- trend filter not bearish
+- volatility not extreme
+
+Short carry setup:
+- curve is in steep contango or carry signal negative
+- carry z-score <= -1.0
+- trend filter not bullish
+
+Alternative combined score:
+combined_score = 0.60 * carry_z + 0.40 * trend_z
+
+Enter if abs(combined_score) >= 1.25.
+
+## Exit Rules
+- carry z-score normalizes below 0.25
+- trend filter turns against position
+- roll window reached and roll cost exceeds expected carry
+- stop based on 2.5 * ATR or vol-targeted drawdown
+
+## Position Sizing
+- volatility target per contract/asset
+- max 10% to 15% per market
+- max commodity sector exposure 30%
+- reduce exposure before illiquid roll periods
+
+## Risk Controls
+- liquidity filter: minimum open interest and volume
+- do not trade contracts near expiry unless roll logic is implemented
+- cap exposure to correlated commodity groups
+- stress test gap moves
+
+## Transaction Cost / Execution
+- Must include roll transaction costs.
+- Execution around roll dates must be explicit.
+- If using ETFs, include ETF expense ratio and tracking issues if possible.
+
+## Backtest Plan
+- Build continuous futures carefully.
+- Compare front-month roll vs next-month roll.
+- Test carry-only, trend-only, and carry+trend combined.
+- Report PnL from spot move vs roll/carry component if possible.
+
+## Failure Modes
+- Futures curves can stay extreme.
+- Contango/backwardation logic differs by market.
+- Liquidity and roll timing can dominate results.
+- ETF proxies may mislead.
+
+## Bot Pseudocode
+for each futures_market:
+    chain = load_futures_chain(market)
+    carry = compute_annualized_carry(front, next)
+    trend = compute_trend(front_continuous)
+    signal = combine(carry_z, trend_z)
+    if abs(signal) >= threshold and risk_ok:
+        target_position = vol_target(signal)
+    roll_positions_if_needed()
+
+## Implementation Priority
+Medium-high if futures-chain data is available. Otherwise build after S01/S03.
+
+============================================================
+S05 - IMPLIED-VS-REALIZED VOLATILITY OPTIONS STRATEGY
+============================================================
+
+## Objective
+Trade the difference between implied volatility and forecast realized volatility using defined-risk option structures.
+
+## Market Logic
+Options embed market expectations and risk premia. If implied volatility is meaningfully above forecast realized volatility, defined-risk short-volatility structures may have positive expectancy. If implied volatility is unusually cheap versus expected realized movement, long-volatility structures may be attractive.
+
+## Instruments
+- SPY, QQQ, IWM options first
+- Very liquid single-name options later
+- Avoid illiquid chains
+
+## Data Required
+- Options chain with bid, ask, mark, volume, open interest
+- Implied volatility by strike and expiry
+- Greeks
+- Underlying OHLCV
+- Dividends and rates
+- Earnings/event calendar for single names
+
+## Features
+- realized_vol_20d
+- realized_vol_60d
+- EWMA volatility forecast
+- optional GARCH volatility forecast
+- ATM implied_vol_30d
+- IV rank / IV percentile
+- volatility_risk_premium = implied_vol - forecast_realized_vol
+- skew slope: OTM put IV - ATM IV
+- term slope: IV_30d - IV_60d
+
+## Entry Rules - Defined-Risk Short Volatility
+Use only defined-risk trades in v1: iron condor, iron butterfly, credit spread.
+
+Enter short-vol setup if:
+- IV percentile >= 70
+- implied_vol - forecast_realized_vol >= threshold, e.g., 5 annualized vol points
+- no major known event in the holding window
+- bid/ask spread acceptable
+- underlying trend is not in panic mode
+- max loss is defined and acceptable
+
+Example iron condor:
+- sell 30-45 DTE call spread with short call around 0.15-0.25 delta
+- sell 30-45 DTE put spread with short put around -0.15 to -0.25 delta
+- width chosen so max loss <= risk limit
+
+## Entry Rules - Long Volatility
+Enter long-vol setup if:
+- IV percentile <= 30
+- forecast realized volatility > implied volatility by threshold
+- expected movement is not already fully priced
+- structure: long straddle, long strangle, or debit spread
+
+## Exit Rules
+Short vol:
+- take profit at 40% to 60% of max credit
+- stop loss at 1.5x to 2.0x credit received
+- exit at 21 DTE to reduce gamma risk
+- exit if underlying breaches short strike and delta hedge is not part of strategy
+
+Long vol:
+- take profit when option value increases by 50% to 100%
+- exit when theta decay reaches budget
+- exit if realized move does not occur by pre-defined date
+- exit before liquidity declines
+
+## Position Sizing
+- risk max 0.25% to 1.00% of account per options structure
+- max total options premium/margin risk: 5% to 10%
+- no undefined-risk short straddles/strangles in v1
+
+## Greeks Risk Controls
+Track:
+- net delta
+- gamma
+- theta
+- vega
+- max loss
+- breakevens
+- PnL under +/-1%, +/-2%, +/-5% underlying move
+- IV up/down stress of 5 to 20 vol points
+
+## Transaction Cost / Execution
+- Use bid/ask conservative fills.
+- For buying, assume fill near ask or midpoint plus slippage.
+- For selling, assume fill near bid or midpoint minus slippage.
+- Reject trades with wide spreads.
+
+## Backtest Plan
+- Options backtesting must use chain snapshots, not theoretical prices only.
+- If historical option data is unavailable, create a research simulator but label results as approximate.
+- Test multiple DTE buckets: 15-30, 30-45, 45-60.
+- Test exits by profit target, DTE, and stop.
+
+## Failure Modes
+- Short-vol losses can be large and clustered.
+- IV can rise further after entry.
+- Bid/ask costs can destroy edge.
+- Event risk and gap risk.
+- Greeks change quickly near expiry.
+
+## Bot Pseudocode
+for each underlying:
+    chain = load_option_chain(underlying)
+    rv_forecast = ewma_or_garch(underlying_returns)
+    atm_iv = get_atm_iv(chain, dte_bucket)
+    vrp = atm_iv - rv_forecast
+    if short_vol_conditions and risk_defined_structure_available:
+        structure = build_iron_condor(chain, delta_targets, max_loss)
+        if cost_and_liquidity_ok(structure):
+            open_position(structure)
+    manage_existing_positions_by_profit_loss_dte_greeks()
+
+## Implementation Priority
+Medium. Build after base backtesting engine works.
+
+============================================================
+S06 - LONG GAMMA SCALPING
+============================================================
+
+## Objective
+Buy options when implied volatility is cheap versus expected realized volatility, then delta-hedge to monetize realized movement.
+
+## Market Logic
+A long option position has positive gamma. If the underlying moves enough and the trader hedges well, gamma profits can offset theta decay. This only works when realized volatility exceeds implied volatility plus costs.
+
+## Instruments
+- SPY/QQQ liquid options first
+- 20-45 DTE ATM options
+
+## Data Required
+- Intraday or at least daily underlying prices
+- Options chain with IV and Greeks
+- Bid/ask data
+- Rates/dividends
+
+## Entry Rules
+Enter if:
+- IV percentile <= 30
+- forecast realized volatility > implied volatility by threshold
+- bid/ask spread tight
+- expected holding period has enough movement potential
+- no extreme theta cost relative to expected movement
+
+Structure:
+- long ATM straddle or strangle
+- choose expiry 20-45 DTE
+
+## Hedge Rules
+- Initial delta near zero.
+- Re-hedge when net delta exceeds +/-0.15 or +/-0.25.
+- Use underlying or liquid ETF shares/futures.
+- Track hedge PnL separately from option PnL.
+
+## Exit Rules
+- exit if total PnL reaches target
+- exit if theta budget exceeded
+- exit if IV rises and option premium target achieved
+- exit by 10-14 DTE to avoid high gamma/liquidity risks unless strategy explicitly handles it
+
+## Position Sizing
+- premium paid <= 0.50% to 1.00% of portfolio per trade
+- total long gamma premium budget <= 5% of portfolio
+
+## Risk Controls
+- long options have defined premium risk, but frequent hedging can create cost drag
+- reject if bid/ask too wide
+- monitor overnight gaps if hedge cannot be adjusted
+
+## Backtest Plan
+- Requires high-quality options and underlying data.
+- Separate option PnL, hedge PnL, transaction costs, and theta decay.
+- Test hedge thresholds and rebalance frequency.
+
+## Failure Modes
+- Realized movement too small.
+- Hedge costs exceed gamma gains.
+- Implied volatility falls after entry.
+- Low-liquidity options widen spreads.
+
+## Implementation Priority
+Medium-low until options backtester is reliable.
+
+============================================================
+S07 - VOLATILITY SKEW / RISK REVERSAL STRATEGY
+============================================================
+
+## Objective
+Trade abnormal option skew using defined-risk structures or hedged risk reversals.
+
+## Market Logic
+Equity markets often price downside puts with higher implied volatility. Sometimes skew becomes extreme relative to history. The strategy tests whether skew normalizes or whether risk-defined structures can benefit from overpriced downside protection.
+
+## Instruments
+- SPY, QQQ, IWM options
+- Later liquid single-name options
+
+## Data Required
+- Option chain IV by strike and maturity
+- Delta by option
+- Historical skew percentiles
+- Underlying OHLCV
+- Event calendar
+
+## Features
+- put_skew = IV_25_delta_put - IV_ATM
+- call_skew = IV_25_delta_call - IV_ATM
+- risk_reversal_skew = IV_25_delta_call - IV_25_delta_put
+- skew percentile over 1 year
+- trend filter
+- realized volatility filter
+
+## Entry Rules
+Conservative defined-risk bullish skew trade:
+- put_skew percentile >= 80
+- market trend is neutral/bullish
+- no imminent crash/risk-off filter
+- sell OTM put spread and optionally buy OTM call spread
+- max loss defined
+
+Bearish/event version:
+- if skew is cheap and downside risk filter is high, buy put spread instead of selling put skew
+
+## Exit Rules
+- take profit at 40% to 60% of credit or skew normalization
+- stop if underlying breaches short strike
+- exit before 21 DTE
+- exit if volatility regime changes sharply
+
+## Position Sizing
+- max defined loss <= 0.25% to 0.75% per trade
+- cap total short skew exposure
+
+## Risk Controls
+- no naked short puts
+- stress test -5%, -10%, -20% underlying move
+- stress test IV expansion
+- monitor concentration across correlated indices
+
+## Transaction Cost / Execution
+- Must use bid/ask for multi-leg spreads.
+- Reject low open interest legs.
+- Model slippage for each leg.
+
+## Backtest Plan
+- Requires options surface data.
+- Compare spread structures by delta, width, DTE.
+- Test only after S05 framework exists.
+
+## Failure Modes
+- Skew can be high for a reason.
+- Crash risk can overwhelm credit collected.
+- Multi-leg execution slippage.
+
+## Implementation Priority
+Medium-low. Build after IV surface module.
+
+============================================================
+S08 - CALENDAR / TERM STRUCTURE VOLATILITY SPREAD
+============================================================
+
+## Objective
+Trade relative mispricing between near-term and longer-term implied volatility.
+
+## Market Logic
+Volatility term structure changes with event risk, market stress, and supply/demand. Calendar spreads can express a view that one expiry is overpriced or underpriced relative to another.
+
+## Instruments
+- SPY/QQQ options first
+- Single names only if event calendar is modeled
+
+## Data Required
+- Options chain across expiries
+- IV by expiry at comparable delta/strike
+- Event calendar
+- Bid/ask and Greeks
+
+## Features
+- IV_15d, IV_30d, IV_60d
+- term_slope = IV_30d - IV_60d
+- term_slope_percentile
+- realized volatility forecast
+- event flag
+
+## Entry Rules
+Long calendar example:
+- near-term IV is low vs longer-term IV
+- expected near-term movement is low but longer-term optionality is attractive
+- buy longer-dated option, sell shorter-dated option at same or similar strike
+
+Short calendar / reverse calendar example:
+- near-term IV extremely high due to event
+- only if event risk is understood and max loss defined
+- avoid single-name earnings in v1 unless explicitly designed
+
+## Exit Rules
+- exit when term slope normalizes
+- exit before short option expiry if assignment/gamma risk rises
+- close if underlying moves far from strike
+- close at max loss threshold
+
+## Position Sizing
+- max loss <= 0.25% to 0.75% per trade
+- total calendar risk <= 3% to 5%
+
+## Risk Controls
+- monitor gamma of short near-term option
+- monitor vega exposure of long far-term option
+- avoid illiquid expiries
+
+## Transaction Cost / Execution
+- Multi-leg cost matters.
+- Use conservative fill model.
+
+## Backtest Plan
+- Requires option chain history.
+- Test term structures by DTE buckets.
+- Segment event vs non-event periods.
+
+## Failure Modes
+- Underlying moves too far.
+- Near-term short option gamma risk.
+- IV term structure shifts against position.
+
+## Implementation Priority
+Low-medium. Requires solid options infrastructure.
+
+============================================================
+S09 - SYNTHETIC ARBITRAGE SCANNER
+============================================================
+
+## Objective
+Scan for apparent violations of put-call parity, box-spread pricing, butterfly convexity, and synthetic forward relationships.
+
+## Market Logic
+No-arbitrage relationships define bounds between options, stock, rates, and dividends. Apparent violations may identify data issues, stale quotes, or rare opportunities.
+
+## Instruments
+- Very liquid European-style index options are best.
+- American equity options need early-exercise and dividend handling.
+
+## Data Required
+- Option chains with bid/ask
+- Underlying price bid/ask
+- Rates
+- Dividends
+- Exercise style
+- Borrow/financing cost
+- Contract multipliers
+
+## Scanner Rules
+Put-call parity for European options:
+- synthetic_forward = call_price - put_price + K * exp(-rT)
+- compare with discounted/adjusted underlying price
+
+Box spread:
+- long bull call spread + bear put spread should approximate discounted strike difference
+- only consider after fees, spreads, financing, and margin
+
+Butterfly convexity:
+- option prices should be convex in strike for same expiry
+- violations often indicate bad/stale data
+
+## Entry Rules
+In v1, do not auto-trade. Only flag.
+A candidate is valid only if:
+- edge > all transaction costs + financing + margin cost + safety buffer
+- quotes are firm and liquid
+- exercise/assignment/dividend risk is handled
+- legs can be executed simultaneously
+
+## Exit Rules
+- close at convergence or expiry depending on structure
+- but v1 should be scanner/report only
+
+## Position Sizing
+- no live size in v1
+- research-only scanner
+
+## Risk Controls
+- apparent arbitrage can be false due to stale data, early exercise, hard-to-borrow, margin, or liquidity
+- never route live trades automatically in v1
+
+## Backtest Plan
+- Scanner accuracy test first.
+- Count false positives.
+- Validate against manual examples.
+
+## Failure Modes
+- Stale quotes.
+- Incomplete chain.
+- Exercise style ignored.
+- Dividends ignored.
+- Multi-leg execution failure.
+
+## Implementation Priority
+Build as a validation/scanner tool, not as primary profit strategy.
+
+============================================================
+S10 - TAIL HEDGE / PORTFOLIO INSURANCE OVERLAY
+============================================================
+
+## Objective
+Reduce portfolio drawdowns during large market declines using options or dynamic hedging.
+
+## Market Logic
+A profitable bot can still fail if one crash destroys capital. Tail hedging is usually a cost center, but it can improve survival and reduce forced liquidation.
+
+## Instruments
+- SPY/QQQ put spreads
+- Index futures overlay
+- Cash/risk reduction
+
+## Data Required
+- Portfolio exposures
+- Index options chain
+- Underlying OHLCV
+- Volatility regime indicators
+
+## Hedge Rules
+Static put-spread overlay:
+- every month or quarter, buy OTM put spread when portfolio net exposure is high
+- choose 30-90 DTE
+- risk budget: 0.25% to 1.00% per month/quarter
+
+Dynamic hedge overlay:
+- reduce beta when trend filter turns risk-off
+- use index futures/ETF to reduce exposure
+- avoid overtrading in whipsaw markets
+
+## Entry / Activation
+Activate hedge if:
+- portfolio beta > threshold
+- market trend turns negative
+- volatility regime rises
+- drawdown exceeds early warning threshold
+
+## Exit / Deactivation
+- hedge expires or reaches target value
+- market regime normalizes
+- portfolio exposure is reduced
+
+## Position Sizing
+- hedge premium budget fixed ex ante
+- do not overspend on hedges
+- hedge ratio based on portfolio beta and desired protection level
+
+## Risk Controls
+- understand theta cost
+- dynamic hedging can fail in crash gaps
+- do not rely solely on selling into a crash
+
+## Backtest Plan
+- test with and without overlay
+- compare CAGR, max drawdown, ulcer index, Sharpe, and crisis PnL
+- include transaction costs
+
+## Failure Modes
+- hedges bleed premium in calm markets
+- dynamic hedges whipsaw
+- options liquidity worsens in stress
+
+## Implementation Priority
+Build as portfolio risk overlay after core strategies.
+
+============================================================
+STRATEGY RANKING SUMMARY
+============================================================
+
+Best first build:
+1. S01 Trend Following - simple data, robust architecture, clear risk controls.
+2. S03 Pairs Trading - good for relative-value engine and risk model.
+3. S02 Factor Blend - powerful but data quality matters.
+4. S04 Carry - good if futures-chain data is available.
+
+Best second build:
+5. S05 Implied-vs-Realized Volatility - central options strategy but data-heavy.
+6. S06 Long Gamma Scalping - requires hedging simulator and cost accuracy.
+7. S07 Skew Strategy - requires IV surface module.
+8. S08 Calendar Spread - requires term-structure and event handling.
+
+Use as tools/overlays:
+9. S09 Arbitrage Scanner - useful for validation and rare opportunities.
+10. S10 Tail Hedge - risk-control overlay, not primary alpha.
+
+============================================================
+MINIMUM VIABLE BOT ROADMAP
+============================================================
+
+Phase 1 - Research Engine
+- data loading
+- indicator calculation
+- backtest framework
+- transaction cost model
+- risk reporting
+
+Phase 2 - OHLCV Strategies
+- implement S01 trend following
+- implement S03 pairs trading
+- implement S02 price-only factor model
+
+Phase 3 - Portfolio Construction
+- combine strategy signals
+- volatility targeting
+- exposure caps
+- drawdown controls
+
+Phase 4 - Derivatives Layer
+- options chain loader
+- IV and Greeks module
+- options payoff engine
+- S05 strategy
+- S09 scanner
+
+Phase 5 - Paper Trading
+- simulated broker
+- daily reports
+- risk dashboard
+- no live trading until manual review

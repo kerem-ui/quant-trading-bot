@@ -1,0 +1,53 @@
+"""Order records.
+
+An Order always has ``signal_date < execution_date``. The engine constructs
+orders on the signal date but they only fill on the next bar - this invariant
+is what prevents look-ahead, and it is asserted by the engine and tested.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+
+import pandas as pd
+
+
+class OrderSide(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderStatus(str, Enum):
+    PENDING = "PENDING"
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+
+
+@dataclass
+class Order:
+    symbol: str
+    signal_date: pd.Timestamp
+    execution_date: pd.Timestamp
+    prev_weight: float
+    target_weight: float
+    status: OrderStatus = OrderStatus.PENDING
+    fill_price: float | None = None
+    cost: float = 0.0
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if pd.Timestamp(self.execution_date) <= pd.Timestamp(self.signal_date):
+            raise ValueError(
+                f"Look-ahead violation: execution_date {self.execution_date} "
+                f"must be strictly after signal_date {self.signal_date} "
+                f"({self.symbol})."
+            )
+
+    @property
+    def delta_weight(self) -> float:
+        return self.target_weight - self.prev_weight
+
+    @property
+    def side(self) -> OrderSide:
+        return OrderSide.BUY if self.delta_weight >= 0 else OrderSide.SELL

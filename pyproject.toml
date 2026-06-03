@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantbot"
+version = "0.1.0"
+description = "Quantitative trading research and backtesting bot (research only, no live trading)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary - research use only" }
+authors = [{ name = "quant_trading_bot" }]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "statsmodels>=0.14",
+    "matplotlib>=3.8",
+    "yfinance>=0.2.40",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

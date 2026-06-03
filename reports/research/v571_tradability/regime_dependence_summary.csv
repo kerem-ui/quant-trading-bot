@@ -1,0 +1,16 @@
+strategy,window,regime,total_return_pct,win_rate,expectancy_per_trade,profit_factor,positive_window,profit_factor_gt1
+bull_call,jan_jun_2022,bear / downtrend,-1.2658000000000502,0.125,-158.225,0.1698038958483637,False,False
+bull_call,jul_sep_2022,bear-rally then renewed decline,-0.5115000000000314,0.4,-102.30000000000013,0.3809754326515789,False,False
+bull_call,oct_dec_2022,bear-low -> Q4 recovery -> Dec fade,-0.0404000000000182,0.5,-10.100000000000064,0.8947094083919723,False,False
+bull_call,jan_sep_2022,bear + partial rebound,-1.621300000000081,0.3076923076923077,-124.71538461538464,0.3087319860151786,False,False
+bull_call,jan_dec_2022,full-year mixed (bear -> recovery),-1.6762000000000945,0.3529411764705882,-98.60000000000004,0.3890508820527772,False,False
+bear_put,jan_jun_2022,bear / downtrend,0.6489999999999441,0.7,64.89999999999998,2.4084201388888875,True,True
+bear_put,jul_sep_2022,bear-rally then renewed decline,-0.0285000000000312,0.6,-5.700000000000031,0.9451606696170866,False,False
+bear_put,oct_dec_2022,bear-low -> Q4 recovery -> Dec fade,-0.3250000000000308,0.2,-64.99999999999991,0.271953405017922,False,False
+bear_put,jan_sep_2022,bear + partial rebound,0.5089999999999151,0.6666666666666666,33.933333333333294,1.4661172161172156,True,True
+bear_put,jan_dec_2022,full-year mixed (bear -> recovery),0.1465999999998857,0.5263157894736842,7.715789473684225,1.0915734899119247,True,True
+bull_put,jan_jun_2022,bear / downtrend,-1.470100000000063,0.1818181818181818,-133.64545454545453,0.0756413480885311,False,False
+bull_put,jul_sep_2022,bear-rally then renewed decline,-0.9376000000000384,0.5,-156.26666666666662,0.2195121951219512,False,False
+bull_put,oct_dec_2022,bear-low -> Q4 recovery -> Dec fade,0.104499999999974,0.8,20.900000000000013,1.5482686253934943,True,True
+bull_put,jan_sep_2022,bear + partial rebound,-2.359600000000095,0.3125,-147.47499999999997,0.1328506853845871,False,False
+bull_put,jan_dec_2022,full-year mixed (bear -> recovery),-2.073100000000128,0.4761904761904761,-98.7190476190476,0.2761775077685835,False,False

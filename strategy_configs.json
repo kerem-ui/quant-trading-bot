@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "global": {
+    "mode": "research_backtest_only",
+    "allow_live_trading": false,
+    "base_currency": "USD",
+    "default_execution": "next_open",
+    "cost_filter_multiplier": 3.0,
+    "max_portfolio_drawdown_kill_switch": 0.20,
+    "max_strategy_drawdown_pause": 0.12,
+    "default_commission_bps": 1.0,
+    "default_slippage_bps": 2.0
+  },
+  "risk": {
+    "portfolio_vol_target_annual": 0.10,
+    "max_gross_exposure": 1.50,
+    "max_net_exposure": 1.00,
+    "max_single_symbol_weight": 0.15,
+    "max_asset_class_weight": 0.40,
+    "max_daily_loss_reduce_risk": 0.02,
+    "max_total_options_defined_loss": 0.08,
+    "max_defined_loss_per_options_trade": 0.01
+  },
+  "strategies": {
+    "S01_trend_following": {
+      "enabled": true,
+      "rebalance_frequency": "weekly",
+      "lookbacks": [20, 60, 120],
+      "trend_entry_threshold": 1.0,
+      "trend_exit_threshold": 0.25,
+      "vol_window": 20,
+      "atr_window": 14,
+      "trailing_stop_atr_multiple": 3.0,
+      "target_vol_annual": 0.10,
+      "max_weight_per_symbol": 0.15,
+      "long_short": true,
+      "cost_filter_multiplier": 3.0
+    },
+    "S02_factor_blend": {
+      "enabled": true,
+      "rebalance_frequency": "monthly",
+      "mode": "price_only_v1",
+      "min_price": 5.0,
+      "min_avg_dollar_volume": 10000000,
+      "top_quantile_long": 0.20,
+      "bottom_quantile_short": 0.20,
+      "long_short": false,
+      "max_weight_per_name_long_only": 0.04,
+      "max_weight_per_name_long_short": 0.02,
+      "factor_weights_price_only": {
+        "momentum_12m_ex_1m": 0.45,
+        "momentum_3m": 0.20,
+        "one_month_reversal": 0.20,
+        "low_volatility": 0.10,
+        "liquidity": 0.05
+      }
+    },
+    "S03_pairs_mean_reversion": {
+      "enabled": true,
+      "pair_selection_frequency": "monthly",
+      "correlation_window": 252,
+      "min_rolling_correlation": 0.70,
+      "cointegration_pvalue_threshold": 0.05,
+      "hedge_ratio_window": 252,
+      "zscore_window": 60,
+      "entry_z": 2.0,
+      "exit_z": 0.5,
+      "stop_z": 3.5,
+      "max_holding_days": 20,
+      "risk_per_pair": 0.005,
+      "max_active_pairs": 20,
+      "max_pairs_per_symbol": 3
+    },
+    "S04_carry_term_structure": {
+      "enabled": false,
+      "requires_futures_chain": true,
+      "rebalance_frequency": "weekly",
+      "carry_z_window": 252,
+      "entry_threshold": 1.25,
+      "exit_threshold": 0.25,
+      "carry_weight": 0.60,
+      "trend_weight": 0.40,
+      "max_weight_per_market": 0.15
+    },
+    "S05_implied_vs_realized_vol": {
+      "enabled": false,
+      "requires_options_chain": true,
+      "mode": "defined_risk_only",
+      "dte_min": 30,
+      "dte_max": 45,
+      "iv_percentile_short_vol": 70,
+      "iv_percentile_long_vol": 30,
+      "vrp_threshold_vol_points": 5.0,
+      "profit_take_credit_fraction": 0.50,
+      "stop_loss_credit_multiple": 2.0,
+      "exit_dte": 21,
+      "max_defined_loss_per_trade": 0.01,
+      "reject_if_bid_ask_width_pct_gt": 0.20
+    },
+    "S06_long_gamma_scalping": {
+      "enabled": false,
+      "requires_options_chain": true,
+      "requires_intraday_underlying": true,
+      "dte_min": 20,
+      "dte_max": 45,
+      "iv_percentile_max": 30,
+      "delta_hedge_threshold": 0.20,
+      "max_premium_per_trade": 0.01,
+      "exit_dte": 14
+    },
+    "S07_skew_strategy": {
+      "enabled": false,
+      "requires_options_chain": true,
+      "mode": "defined_risk_only",
+      "put_skew_percentile_entry": 80,
+      "dte_min": 30,
+      "dte_max": 60,
+      "max_defined_loss_per_trade": 0.0075
+    },
+    "S08_calendar_vol_spread": {
+      "enabled": false,
+      "requires_options_chain": true,
+      "front_dte_min": 15,
+      "front_dte_max": 35,
+      "back_dte_min": 45,
+      "back_dte_max": 90,
+      "max_defined_loss_per_trade": 0.0075
+    },
+    "S09_arbitrage_scanner": {
+      "enabled": false,
+      "research_scanner_only": true,
+      "requires_options_chain": true,
+      "min_edge_after_costs_bps": 25,
+      "do_not_auto_trade": true
+    },
+    "S10_tail_hedge_overlay": {
+      "enabled": false,
+      "overlay_only": true,
+      "monthly_hedge_budget": 0.005,
+      "dte_min": 30,
+      "dte_max": 90,
+      "risk_off_trend_window": 100
+    }
+  }
+}

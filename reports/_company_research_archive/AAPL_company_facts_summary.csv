@@ -1,0 +1,8 @@
+field,concept_tag,unit,end,val,fy,fp,form
+cash_and_equivalents,CashAndCashEquivalentsAtCarryingValue,USD,2025-09-27,35934000000,2025.0,FY,10-K
+net_income,NetIncomeLoss,USD,2025-09-27,112010000000,2025.0,FY,10-K
+operating_cash_flow,NetCashProvidedByUsedInOperatingActivities,USD,2025-09-27,111482000000,2025.0,FY,10-K
+revenue,RevenueFromContractWithCustomerExcludingAssessedTax,USD,2025-09-27,416161000000,2025.0,FY,10-K
+total_assets,Assets,USD,2025-09-27,359241000000,2025.0,FY,10-K
+total_debt,LongTermDebt,USD,2025-09-27,90678000000,2025.0,FY,10-K
+total_liabilities,Liabilities,USD,2025-09-27,285508000000,2025.0,FY,10-K

@@ -1,0 +1,474 @@
+# Python Implementation Specification for Quant Trading Research Bot
+
+This specification tells Claude Code how to build the research/backtesting project. The first version is a research bot, not a live trading bot.
+
+============================================================
+PROJECT PRINCIPLES
+============================================================
+
+1. Build modular research infrastructure.
+2. Implement strategies as independent modules.
+3. Use realistic transaction costs.
+4. Prevent look-ahead bias.
+5. Prefer conservative risk controls.
+6. Generate readable reports.
+7. Do not implement live trading in v1.
+
+============================================================
+REPOSITORY STRUCTURE
+============================================================
+
+quant_trading_bot/
+  CLAUDE.md
+  README.md
+  pyproject.toml
+  requirements.txt
+  configs/
+    strategy_configs.json
+    data_config.example.json
+    risk_config.example.json
+  data/
+    raw/
+    processed/
+    cache/
+  notebooks/
+    01_explore_data.ipynb
+    02_strategy_research.ipynb
+  reports/
+    backtests/
+    figures/
+  src/
+    quantbot/
+      __init__.py
+      data/
+        __init__.py
+        loaders.py
+        validators.py
+        corporate_actions.py
+        options_loader.py
+        futures_loader.py
+      indicators/
+        __init__.py
+        trend.py
+        volatility.py
+        factors.py
+        pairs.py
+        options_features.py
+      strategies/
+        __init__.py
+        base.py
+        s01_trend_following.py
+        s02_factor_blend.py
+        s03_pairs_mean_reversion.py
+        s04_carry_term_structure.py
+        s05_implied_vs_realized_vol.py
+        s06_gamma_scalping.py
+        s07_skew_strategy.py
+        s08_calendar_vol_spread.py
+        s09_arbitrage_scanner.py
+        s10_tail_hedge.py
+      portfolio/
+        __init__.py
+        construction.py
+        optimizers.py
+        exposure.py
+      risk/
+        __init__.py
+        risk_manager.py
+        var_es.py
+        drawdown.py
+        greeks.py
+        stress.py
+      costs/
+        __init__.py
+        transaction_costs.py
+        slippage.py
+      backtest/
+        __init__.py
+        engine.py
+        broker.py
+        order.py
+        position.py
+        performance.py
+        walk_forward.py
+      options/
+        __init__.py
+        payoff.py
+        pricing.py
+        greeks.py
+        structures.py
+        parity.py
+      reporting/
+        __init__.py
+        tearsheet.py
+        plots.py
+        export.py
+      utils/
+        __init__.py
+        dates.py
+        math.py
+        logging.py
+  tests/
+    test_data_validators.py
+    test_indicators.py
+    test_transaction_costs.py
+    test_backtest_engine.py
+    test_s01_trend_following.py
+    test_s03_pairs.py
+    test_options_payoff.py
+    test_put_call_parity.py
+
+============================================================
+DATA SCHEMAS
+============================================================
+
+## OHLCV Schema
+Required columns:
+- timestamp or date
+- symbol
+- open
+- high
+- low
+- close
+- adjusted_close
+- volume
+
+Optional columns:
+- bid
+- ask
+- spread
+- dividend
+- split_factor
+- sector
+- industry
+- market_cap
+
+Validation rules:
+- no duplicate date-symbol rows
+- high >= low
+- high >= open, close
+- low <= open, close
+- adjusted_close positive
+- volume nonnegative
+- missing data handled explicitly, never silently converted to zero
+
+## Options Chain Schema
+Required columns:
+- timestamp or date
+- underlying
+- expiration
+- dte
+- option_type: call or put
+- strike
+- bid
+- ask
+- mid
+- last optional
+- volume
+- open_interest
+- implied_volatility
+- delta
+- gamma
+- theta
+- vega
+- rho optional
+- contract_multiplier
+- exercise_style if known
+
+Validation rules:
+- bid <= ask
+- mid = (bid + ask) / 2 unless provided
+- reject zero bid/ask when inappropriate
+- reject wide spreads by threshold
+- check DTE and expiration consistency
+
+## Futures Chain Schema
+Required columns:
+- date
+- root_symbol
+- contract
+- expiration
+- settlement
+- volume
+- open_interest
+
+Optional:
+- bid
+- ask
+- first_notice_date
+- roll_date
+
+============================================================
+CORE CLASSES
+============================================================
+
+## Strategy Base Class
+Each strategy should implement:
+- prepare_data(data)
+- generate_signals(data)
+- generate_target_weights(signals, portfolio_state, risk_config)
+- explain_signal(symbol, date)
+
+Outputs:
+- DataFrame of signals with date, symbol, signal, confidence, expected_holding_period, reason
+- DataFrame of target weights
+
+## RiskManager
+Responsibilities:
+- volatility targeting
+- max position caps
+- max gross/net exposure
+- max sector exposure
+- drawdown limits
+- kill switch
+- VaR/ES calculation where possible
+- options Greeks limits
+
+## TransactionCostModel
+Responsibilities:
+- commissions
+- slippage
+- bid/ask spread
+- market impact approximation
+- options multi-leg spread costs
+- cost filter: expected_edge > cost_multiplier * round_trip_cost
+
+Suggested simple v1 model:
+- equities/ETFs: commission_per_share + spread_bps + slippage_bps
+- options: per_contract_fee + bid_ask_fraction + multi_leg_penalty
+- futures: per_contract_fee + tick_slippage
+
+## PortfolioConstructor
+Methods:
+- equal_weight(signals)
+- inverse_vol_weight(signals, vol)
+- volatility_target(weights, vol_target)
+- apply_constraints(weights, constraints)
+- combine_strategy_weights(strategy_weight_dict)
+
+## BacktestEngine
+Responsibilities:
+- iterate through dates
+- pass data to strategies
+- generate target weights
+- create orders
+- simulate fills
+- update positions/cash/equity
+- record metrics
+
+Must prevent look-ahead:
+- Signals generated using data available up to date t.
+- Trades executed at next open or next close according to config.
+- Never use future data for pair selection, factor ranking, IV, or volatility forecast.
+
+============================================================
+STRATEGY IMPLEMENTATION ORDER
+============================================================
+
+## Build in this order
+1. Data loaders and validators
+2. Transaction cost model
+3. Backtest engine
+4. S01 Trend Following
+5. S03 Pairs Mean Reversion
+6. Risk reports and tearsheet
+7. S02 Factor Blend price-only
+8. S04 Carry if futures data exists
+9. Options payoff and Greeks utilities
+10. S05 Implied-vs-Realized Volatility
+11. S09 Arbitrage Scanner
+12. Remaining options strategies
+
+============================================================
+S01 IMPLEMENTATION DETAILS
+============================================================
+
+Module:
+src/quantbot/strategies/s01_trend_following.py
+
+Functions:
+- compute_trend_score(df, lookbacks=[20,60,120])
+- compute_realized_vol(df, window=20)
+- generate_trend_signals(df, threshold=1.0, exit_threshold=0.25)
+- size_by_volatility(signals, vol, target_vol=0.10, max_weight=0.15)
+
+Backtest config:
+- rebalance: weekly
+- execution: next_open or next_close
+- max_weight_per_symbol: 0.15
+- portfolio_vol_target: 0.10
+- cost_filter_multiplier: 3.0
+
+============================================================
+S02 IMPLEMENTATION DETAILS
+============================================================
+
+Module:
+src/quantbot/strategies/s02_factor_blend.py
+
+Functions:
+- build_universe(df, min_price, min_volume)
+- compute_momentum_factor(df)
+- compute_reversal_factor(df)
+- compute_low_vol_factor(df)
+- cross_sectional_rank(features)
+- compute_composite_score(ranks, weights)
+- generate_factor_portfolio(score, top_quantile, bottom_quantile)
+
+V1 should use price-only factors if fundamental data is unavailable.
+
+============================================================
+S03 IMPLEMENTATION DETAILS
+============================================================
+
+Module:
+src/quantbot/strategies/s03_pairs_mean_reversion.py
+
+Functions:
+- find_candidate_pairs(universe, sector_map)
+- estimate_hedge_ratio(price_a, price_b, window=252)
+- compute_spread_zscore(price_a, price_b, hedge_ratio, window=60)
+- estimate_half_life(spread)
+- generate_pair_signals(z, entry_z=2.0, exit_z=0.5, stop_z=3.5)
+- build_pair_orders(pair_signal, hedge_ratio, risk_per_pair)
+
+Important:
+- Pair selection must be walk-forward.
+- Do not use full-history pair selection.
+
+============================================================
+S04 IMPLEMENTATION DETAILS
+============================================================
+
+Module:
+src/quantbot/strategies/s04_carry_term_structure.py
+
+Functions:
+- compute_annualized_carry(front_price, next_price, days_between)
+- compute_curve_zscore(carry_series, window=252)
+- combine_carry_and_trend(carry_z, trend_z, weights)
+- generate_carry_signals(combined_score, threshold=1.25)
+- handle_roll_schedule(positions, roll_dates)
+
+If futures-chain data is unavailable, create the module but mark it as inactive.
+
+============================================================
+OPTIONS MODULE DETAILS
+============================================================
+
+## Payoff Module
+src/quantbot/options/payoff.py
+
+Functions:
+- call_payoff(S, K)
+- put_payoff(S, K)
+- vertical_spread_payoff(S, legs)
+- straddle_payoff(S, K)
+- strangle_payoff(S, K_put, K_call)
+- iron_condor_payoff(S, legs)
+- calendar_placeholder_payoff(...)
+
+## Structures Module
+src/quantbot/options/structures.py
+
+Create classes:
+- OptionLeg
+- OptionStructure
+- VerticalSpread
+- IronCondor
+- Straddle
+- Strangle
+- CalendarSpread
+
+Each structure should compute:
+- net debit/credit
+- max profit if definable
+- max loss if definable
+- breakevens if possible
+- net Greeks
+- scenario PnL
+
+## Greeks Module
+src/quantbot/options/greeks.py
+
+Implement Black-Scholes-style Greeks for research:
+- delta
+- gamma
+- theta
+- vega
+- rho
+
+Use for approximation only. For American options or real trading, label limitations.
+
+## Put-Call Parity Module
+src/quantbot/options/parity.py
+
+Functions:
+- put_call_parity_value(call, put, strike, rate, dte, dividend_yield=0)
+- scan_parity_violations(chain, underlying_price, rate, dividend_yield, cost_model)
+- scan_box_spreads(chain, cost_model)
+- scan_butterfly_convexity(chain)
+
+In v1, scanner should not auto-trade.
+
+============================================================
+BACKTEST REPORTING
+============================================================
+
+Each backtest report must include:
+- CAGR
+- annualized volatility
+- Sharpe
+- Sortino
+- max drawdown
+- Calmar
+- win rate
+- average win/loss
+- turnover
+- total transaction cost
+- exposure chart
+- drawdown chart
+- rolling Sharpe
+- returns by month/year
+- stress-period returns
+- parameter sensitivity if available
+
+============================================================
+TESTING REQUIREMENTS
+============================================================
+
+Minimum tests:
+1. Data validation catches impossible OHLC values.
+2. Trend signal does not use future returns.
+3. Backtest engine executes after signal date, not before.
+4. Transaction costs reduce performance.
+5. Position caps are enforced.
+6. Pairs strategy exits at exit_z and stop_z.
+7. Options payoff functions match known payoff shapes.
+8. Put-call parity scanner handles bid/ask and does not flag false opportunities without cost buffer.
+
+============================================================
+DO NOT DO IN V1
+============================================================
+
+- Do not connect to a live broker.
+- Do not place live trades.
+- Do not use naked short options.
+- Do not build HFT or market-making assumptions.
+- Do not optimize parameters aggressively.
+- Do not ignore dividends, splits, or corporate actions for equities.
+- Do not trust options last price as executable price.
+
+============================================================
+FINAL EXPECTED OUTPUT FROM CLAUDE CODE
+============================================================
+
+A working Python research repo that can:
+1. Load OHLCV data.
+2. Validate data.
+3. Run S01 trend following backtest.
+4. Run S03 pairs backtest.
+5. Generate performance report.
+6. Include cost and risk models.
+7. Include options payoff/parity utilities for later expansion.
+8. Include tests.

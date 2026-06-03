@@ -1,0 +1,210 @@
+# Claude Code Prompts - Copy/Paste In Order
+
+Use these prompts inside Claude Code. Keep the files CLAUDE.md, IMPLEMENTATION_SPEC.txt, STRATEGY_PLAYBOOK.txt, and strategy_configs.json in the project folder.
+
+============================================================
+PROMPT 0 - PLAN FIRST
+============================================================
+
+Read CLAUDE.md, IMPLEMENTATION_SPEC.txt, STRATEGY_PLAYBOOK.txt, and strategy_configs.json.
+Do not start coding yet.
+
+First produce a concise implementation plan with:
+1. repository structure
+2. core modules/classes
+3. data assumptions
+4. which strategies you will implement first
+5. tests you will write first
+6. simplifications you will make in v1
+7. risks that remain unresolved
+
+Be conservative. This is a research/backtesting bot, not a live trading bot.
+
+============================================================
+PROMPT 1 - CREATE PROJECT SKELETON
+============================================================
+
+Now create the Python project skeleton exactly according to IMPLEMENTATION_SPEC.txt.
+
+Create:
+- src/quantbot package
+- data, indicators, strategies, portfolio, risk, costs, backtest, options, reporting, utils modules
+- configs folder
+- tests folder
+- README.md
+- requirements.txt or pyproject.toml
+
+Do not implement every strategy yet. Create clean placeholders and base classes. Add docstrings explaining what each module is responsible for.
+
+============================================================
+PROMPT 2 - DATA VALIDATION AND COST MODEL
+============================================================
+
+Implement the data validation and transaction cost modules first.
+
+Build:
+1. OHLCV validator
+2. options chain validator placeholder
+3. futures chain validator placeholder
+4. transaction cost model for equities/ETFs
+5. transaction cost model for options structures
+6. unit tests for validators and costs
+
+Make sure missing values are handled explicitly and never silently converted to zero.
+
+============================================================
+PROMPT 3 - BACKTEST ENGINE V1
+============================================================
+
+Implement BacktestEngine v1.
+
+Requirements:
+- no look-ahead bias
+- strategy generates signals using data up to date t
+- execution happens on next bar according to config
+- simulate cash, positions, equity curve, orders, fills, and transaction costs
+- support target weights
+- output performance metrics
+- include tests proving transaction costs reduce returns and signals are not executed before they exist
+
+Keep it simple and robust.
+
+============================================================
+PROMPT 4 - IMPLEMENT S01 TREND FOLLOWING
+============================================================
+
+Implement S01 Multi-Asset Volatility-Targeted Trend Following.
+
+Use the rules in STRATEGY_PLAYBOOK.txt and strategy_configs.json.
+
+Required functions:
+- compute_trend_score
+- compute_realized_vol
+- generate_trend_signals
+- size_by_volatility
+- apply_risk_limits
+
+Add a runnable example script that loads sample OHLCV data or synthetic data and runs a backtest.
+Add unit tests for signal generation and position caps.
+
+============================================================
+PROMPT 5 - IMPLEMENT REPORTING / TEARSHEET
+============================================================
+
+Implement reporting for backtest results.
+
+Include:
+- CAGR
+- annualized volatility
+- Sharpe
+- Sortino
+- max drawdown
+- Calmar
+- turnover
+- total transaction costs
+- exposure summary
+- monthly returns table
+
+Create a simple report exporter to CSV/Markdown.
+
+============================================================
+PROMPT 6 - IMPLEMENT S03 PAIRS MEAN REVERSION
+============================================================
+
+Implement S03 Pairs / Statistical Arbitrage Mean Reversion.
+
+Requirements:
+- rolling hedge ratio
+- spread z-score
+- entry_z, exit_z, stop_z
+- max holding period
+- dollar-neutral or beta-neutral sizing
+- walk-forward pair selection placeholder
+- risk limits
+
+Add tests for entry, exit, stop, and max holding period.
+
+============================================================
+PROMPT 7 - IMPLEMENT S02 PRICE-ONLY FACTOR BLEND
+============================================================
+
+Implement S02 Cross-Sectional Factor Blend using price-only data first.
+
+Features:
+- 12-month momentum excluding latest month
+- 3-month momentum
+- 1-month reversal
+- low volatility
+- liquidity filter
+- cross-sectional ranks
+- composite score
+- long-only and long/short modes
+
+Add tests to ensure ranks are computed cross-sectionally by date and no future data is used.
+
+============================================================
+PROMPT 8 - OPTIONS UTILITIES, NOT OPTIONS STRATEGY YET
+============================================================
+
+Implement options utilities before any options trading strategy.
+
+Build:
+- OptionLeg
+- OptionStructure
+- payoff functions for call, put, vertical spread, straddle, strangle, iron condor
+- max profit/loss when definable
+- breakeven calculation where possible
+- simple Black-Scholes Greek approximation for research
+- put-call parity scanner skeleton
+
+Add tests for payoff shapes and known parity examples.
+Do not create live options trading logic.
+
+============================================================
+PROMPT 9 - IMPLEMENT S05 RESEARCH ONLY
+============================================================
+
+Implement S05 Implied-vs-Realized Volatility as a research-only strategy.
+
+Requirements:
+- compute realized volatility
+- compute EWMA volatility forecast
+- compare forecast RV with ATM IV from options chain data
+- generate candidate defined-risk structures only
+- reject trades with wide bid/ask spreads
+- track max loss, net Greeks, DTE, and scenario PnL
+
+If historical options chain data is not available, create the module with clear interface and a synthetic example, but label it as approximate.
+
+============================================================
+PROMPT 10 - WALK-FORWARD AND ROBUSTNESS
+============================================================
+
+Add walk-forward testing and robustness tools.
+
+Implement:
+- train/test split by date
+- parameter grid runner
+- walk-forward windows
+- transaction cost sensitivity test
+- slippage sensitivity test
+- summary report comparing parameter stability
+
+Do not optimize for best single parameter. Focus on robustness.
+
+============================================================
+PROMPT 11 - FINAL REVIEW
+============================================================
+
+Review the whole project.
+
+Check for:
+- look-ahead bias
+- missing transaction costs
+- missing risk limits
+- confusing code
+- missing tests
+- unrealistic options assumptions
+- accidental live-trading code
+
+Then produce a final README section explaining how to run the backtests and what limitations remain.

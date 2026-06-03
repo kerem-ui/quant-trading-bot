@@ -1,0 +1,11 @@
+# SEC EDGAR cache snapshot (data/company/sec/)
+Generated: 2026-05-22
+
+     865,378  data/company/sec\company_tickers.json
+   4,150,556  data/company/sec\companyfacts\CIK0000320193.json
+      40,452  data/company/sec\filings\CIK0000320193\000032019324000120\aapl-20241031.htm
+   1,503,780  data/company/sec\filings\CIK0000320193\000032019324000123\aapl-20240928.htm
+      48,733  data/company/sec\filings\CIK0000320193\000114036124040659\ef20035718_8k.htm
+     180,643  data/company/sec\submissions\CIK0000320193.json
+
+   6,789,542  TOTAL bytes cached

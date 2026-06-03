@@ -1,0 +1,120 @@
+================================================================================
+COMPANY & FUNDAMENTALS RESEARCH LAYER — STABILIZATION CHECKPOINT
+Date: 2026-05-22
+Status: FROZEN (read-only research layer). V5.9 options/OOS path remains PAUSED.
+LIVE_TRADING_ENABLED = False.
+================================================================================
+
+PURPOSE
+  Freeze the read-only SEC EDGAR company/fundamentals research layer before
+  returning to the paused V5.9 out-of-sample options work. This is a research/
+  annotation layer only — it produces NO trading signals and is wired into NO
+  strategy or backtest.
+
+--------------------------------------------------------------------------------
+1. MODULES ADDED
+--------------------------------------------------------------------------------
+  src/quantbot/company/__init__.py          package marker / exports
+  src/quantbot/company/sec_edgar.py         stdlib-urllib SEC client: configurable
+                                            QUANTBOT_SEC_USER_AGENT (never hardcoded
+                                            private / never printed), polite ~5 req/s
+                                            throttle, atomic local cache under
+                                            data/company/sec/, never raises. ticker->CIK,
+                                            submissions, companyfacts, filing-doc fetch.
+  src/quantbot/company/filing_index.py      pure: build/filter filing index from
+                                            submissions JSON; filings_near(date).
+  src/quantbot/company/company_facts.py     pure: extract curated fundamentals via
+                                            ordered candidate XBRL tags (no guessing);
+                                            availability table; latest-annual summary.
+  src/quantbot/company/filing_parser.py     pure: HTML->text (stdlib html.parser, no
+                                            BeautifulSoup) + best-effort section detect.
+  src/quantbot/company/company_report.py    orchestrator: writes reports, integrates
+                                            V5.7 strongest-move + macro/market context.
+  src/quantbot/company/lseg_placeholder.py  design note only; is_available() -> False.
+  scripts/run_company_research.py           thin driver (default AAPL 2019-2024).
+  tests/test_company_research.py            28 toy-fixture tests (never hit network).
+
+--------------------------------------------------------------------------------
+2. REPORTS WRITTEN  (reports/company/sec_edgar/  — copies archived here)
+--------------------------------------------------------------------------------
+  company_data_availability.md       what resolved/fetched + facts availability + limits
+  AAPL_filing_index.csv              10-K/10-Q/8-K index (in scope, with doc URLs)
+  AAPL_company_facts_summary.csv     latest annual fundamentals per field
+  AAPL_recent_filings_summary.md     filing list + parsed-section detection
+  AAPL_macro_company_context.md      strongest 21d/63d moves vs SPY/VIX + nearby filings
+  cache_snapshot.txt                 inventory of cached SEC artifacts (this archive)
+
+--------------------------------------------------------------------------------
+3. AAPL DATA FETCHED / INDEXED  (live SEC + yfinance; now cached & deterministic)
+--------------------------------------------------------------------------------
+  CIK resolved:               0000320193
+  SEC submissions:            fetched (recent block)
+  Filings total (recent):     1000
+  Filings in scope:           75  (10-K / 10-Q / 8-K within 2019-2024)
+  Filing docs parsed:         3 most-recent (text + section detection)
+                              e.g. 2024-11-01 10-K -> sections: business, risk_factors,
+                              mdna, liquidity, market_risk; 8-Ks -> material_events
+  Price-move windows:         12 (21d & 63d, up/down) annotated w/ SPY return + VIX
+
+--------------------------------------------------------------------------------
+4. COMPANY FACTS EXTRACTED  (XBRL us-gaap; all 7 present for AAPL)
+--------------------------------------------------------------------------------
+  revenue              (RevenueFromContractWithCustomerExcludingAssessedTax)
+  net_income           (NetIncomeLoss)
+  total_assets         (Assets)
+  total_liabilities    (Liabilities)
+  cash_and_equivalents (CashAndCashEquivalentsAtCarryingValue)
+  operating_cash_flow  (NetCashProvidedByUsedInOperatingActivities)
+  total_debt           (LongTermDebt)
+  Policy: each field maps to an ORDERED list of candidate tags; first present wins;
+  a missing tag is reported unavailable, never guessed.
+
+--------------------------------------------------------------------------------
+5. FILING PARSER LIMITATIONS
+--------------------------------------------------------------------------------
+  - Only the submissions `recent` block is parsed (older `filings.files` shards
+    are a documented future extension).
+  - Section extraction is best-effort heading-regex, NOT a legal/structural parse;
+    a missing section key means "not extracted", not "absent from the filing".
+  - companyfacts is not date-filtered, so "latest annual" reflects the newest 10-K.
+  - XBRL tag coverage varies by filer/era; unavailable fields are reported as such.
+  - HTML->text uses stdlib html.parser (no BeautifulSoup) — readable, not pixel-perfect.
+
+--------------------------------------------------------------------------------
+6. LSEG / DATASTREAM
+--------------------------------------------------------------------------------
+  Placeholder only (lseg_placeholder.py). NOT implemented; NOT required for this
+  layer. Deferred until an LSEG/Datastream API entitlement is confirmed. Would be
+  read-only, env-var auth, cached, no broker, LIVE_TRADING_ENABLED stays False.
+
+--------------------------------------------------------------------------------
+7. TESTS
+--------------------------------------------------------------------------------
+  Full suite: 262 passed (234 prior + 28 new company tests).
+  Company tests use toy fixtures + monkeypatched http_get; they NEVER hit network.
+
+--------------------------------------------------------------------------------
+8. GUARDRAILS (verified this checkpoint)
+--------------------------------------------------------------------------------
+  [x] LIVE_TRADING_ENABLED is False
+  [x] No broker / live / IBKR imports
+  [x] No order execution (no place/execute/submit_order)
+  [x] No ThetaData call
+  [x] No options data fetch
+  [x] No strategy / backtest / default changes
+  [x] No trading signals (annotation/research only)
+  [x] No package installs (stdlib + pandas/numpy + intra-package only)
+  [x] No credentials printed or requested (SEC needs no key; UA never logged)
+  [x] SEC User-Agent configurable (QUANTBOT_SEC_USER_AGENT); default is a generic
+      placeholder containing no private data
+  [x] Reports deterministic on cache-first re-run (byte-identical; no embedded timestamps)
+
+--------------------------------------------------------------------------------
+9. NEXT INTENDED STEPS
+--------------------------------------------------------------------------------
+  - Set QUANTBOT_SEC_USER_AGENT to a real "Name email" for sustained live fetching.
+  - Layer is ready to extend to more tickers (build_company_research(ticker=...)).
+  - Optional deepening: parse older `filings.files` shards; richer section bodies.
+  - The paused V5.9 OOS options decision (2023 Q1 / multi-year data scope) remains
+    OPEN and untouched by this checkpoint.
+================================================================================

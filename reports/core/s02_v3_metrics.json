@@ -1,0 +1,127 @@
+{
+  "data_source": "loaded 18 symbols x 4119 bars (2010-01-04 -> 2026-05-19). If yfinance was unreachable this is SYNTHETIC data (illustrative only, not market data) - see console log above.",
+  "headline": {
+    "start": "2010-01-04",
+    "end": "2026-05-19",
+    "n_days": 4119,
+    "cagr": 0.020948282915466354,
+    "annual_vol": 0.025840769648698688,
+    "sharpe": 0.8152528176166521,
+    "sortino": 0.9644971619027546,
+    "max_drawdown": -0.04483628362648717,
+    "max_dd_duration_days": 487,
+    "calmar": 0.46721720047044873,
+    "annual_turnover": 1.5718674380262532,
+    "total_transaction_cost": 14900.263510374918,
+    "cost_drag_pct_of_initial": 0.014900263510374918,
+    "avg_gross_exposure": 0.15030662874362155
+  },
+  "cost_split": {
+    "trading_cost": 14900.263510374918,
+    "borrow_cost": 0.0,
+    "total_cost": 14900.263510374918,
+    "trading_buy_cost": 7490.340837244702,
+    "trading_sell_cost": 7409.922673130201,
+    "borrow_pct_of_total": 0.0
+  },
+  "etf_best": {
+    "SLV": 0.045107,
+    "XLK": 0.044479,
+    "GLD": 0.042088,
+    "QQQ": 0.034704,
+    "XLV": 0.034551
+  },
+  "etf_worst": {
+    "XLB": 0.002437,
+    "SPY": 0.002632,
+    "IEF": 0.003485,
+    "TLT": 0.003527,
+    "XLRE": 0.004914
+  },
+  "factor_weight_sensitivity": {
+    "default_sharpe": 0.8152528176166521,
+    "equal_weight_sharpe": 0.8035306627175989,
+    "random_mean": 0.8399664163580285,
+    "random_min": 0.7425303459892213,
+    "random_max": 0.9882141574322358,
+    "random_frac_positive": 1.0,
+    "edge_is_robust": true
+  },
+  "drawdown_window": {
+    "peak": "2020-02-19",
+    "trough": "2020-03-23",
+    "depth": -0.04483628362648717
+  },
+  "regime_sharpe": {
+    "SPY_bull": 0.9240873703992846,
+    "SPY_bear": 0.5910101564534703,
+    "high_vol": 0.8649716660775836,
+    "low_vol": 0.7755189754313148
+  },
+  "explicit_2020_2022": {
+    "COVID 2020 (02-15..04-15)": {
+      "cum_return": -0.018808,
+      "spy_cum_return": -0.172413,
+      "max_drawdown": -0.044798
+    },
+    "Bear 2022 (01-01..10-31)": {
+      "cum_return": 0.003755,
+      "spy_cum_return": -0.177443,
+      "max_drawdown": -0.022234
+    },
+    "Full 2020": {
+      "cum_return": 0.032997,
+      "spy_cum_return": 0.183316,
+      "max_drawdown": -0.044798
+    },
+    "Full 2022": {
+      "cum_return": 0.008881,
+      "spy_cum_return": -0.181754,
+      "max_drawdown": -0.022234
+    }
+  },
+  "benchmark_table": {
+    "SPY_buyhold": {
+      "strat_cagr": 0.020953,
+      "bench_cagr": 0.141083,
+      "excess_cagr": -0.12013,
+      "strat_sharpe": 0.815352,
+      "bench_sharpe": 0.856234,
+      "tracking_error": 0.15285,
+      "beta_to_bench": 0.113595,
+      "correlation": 0.753234,
+      "information_ratio": -0.82211,
+      "down_capture": 0.118306
+    },
+    "equal_weight_basket": {
+      "strat_cagr": 0.020953,
+      "bench_cagr": 0.11926,
+      "excess_cagr": -0.098306,
+      "strat_sharpe": 0.815352,
+      "bench_sharpe": 0.904113,
+      "tracking_error": 0.115418,
+      "beta_to_bench": 0.151352,
+      "correlation": 0.788911,
+      "information_ratio": -0.872655,
+      "down_capture": 0.158849
+    },
+    "SHY_cash": {
+      "strat_cagr": 0.020953,
+      "bench_cagr": 0.013547,
+      "excess_cagr": 0.007406,
+      "strat_sharpe": 0.815352,
+      "bench_sharpe": 1.012379,
+      "tracking_error": 0.029123,
+      "beta_to_bench": -0.003433,
+      "correlation": -0.001777,
+      "information_ratio": 0.258403,
+      "down_capture": -0.184377
+    }
+  },
+  "guards": {
+    "live_trading_enabled": false,
+    "options_added": false,
+    "broker_added": false,
+    "defaults_changed": false
+  }
+}

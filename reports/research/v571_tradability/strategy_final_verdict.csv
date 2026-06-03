@@ -1,0 +1,4 @@
+strategy,full_year_return_pct,full_year_expectancy_per_trade,full_year_profit_factor,windows_positive,windows_pf_gt_1,best_window,best_window_ret_pct,worst_window,worst_window_ret_pct,sign_stable_across_regimes,verdict
+bull_call,-1.6762,-98.6,0.389,0/5,0/5,oct_dec_2022,-0.0404,jan_dec_2022,-1.6762,True,NOT deployable; improved toward flat in recovery but no persistent positive expectancy
+bear_put,0.1466,7.72,1.092,3/5,3/5,jan_jun_2022,0.649,oct_dec_2022,-0.325,False,REJECTED as regime-independent edge; regime-directional bearish bet (engine validated)
+bull_put,-2.0731,-98.72,0.276,1/5,1/5,oct_dec_2022,0.1045,jan_sep_2022,-2.3596,False,NOT deployable; positive only in Q4 recovery; regime-directional bullish/credit bet

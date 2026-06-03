@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy to data_config.json and edit. Research/backtest only. ETF-only universe, free daily OHLCV.",
+  "source": "yfinance",
+  "cache_dir": "data/cache",
+  "raw_dir": "data/raw",
+  "start_date": "2010-01-01",
+  "end_date": null,
+  "use_adjusted_close": true,
+  "allow_synthetic_fallback": true,
+  "synthetic_seed": 42,
+  "universes": {
+    "s01_trend": ["SPY", "QQQ", "IWM", "DIA", "TLT", "IEF", "GLD", "SLV", "UUP"],
+    "s02_factor": ["SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "GLD", "SLV", "TLT", "IEF"],
+    "s03_pairs": ["SPY", "IVV", "VOO", "DIA", "GLD", "IAU", "SLV", "XLF", "KBE", "XLE", "XOP", "QQQ", "XLK", "IWM", "VTWO"],
+    "_s03_pairs_wide_research_only": ["SPY", "IVV", "VOO", "DIA", "SCHX", "GLD", "IAU", "SLV", "XLF", "KBE", "VFH", "XLE", "XOP", "VDE", "QQQ", "XLK", "VGT", "IWM", "VTWO", "VB", "TLT", "IEF", "SHY"]
+  },
+  "sector_map": {
+    "SPY": "broad_equity", "IVV": "broad_equity", "VOO": "broad_equity",
+    "SCHX": "broad_equity",
+    "QQQ": "tech_equity", "XLK": "tech_equity", "VGT": "tech_equity",
+    "IWM": "small_cap", "VTWO": "small_cap", "VB": "small_cap", "DIA": "broad_equity",
+    "XLF": "financials", "KBE": "financials", "VFH": "financials",
+    "XLE": "energy", "XOP": "energy", "VDE": "energy", "USO": "energy",
+    "XLV": "healthcare", "XLI": "industrials", "XLY": "consumer_disc",
+    "XLP": "consumer_staples", "XLU": "utilities", "XLB": "materials",
+    "XLRE": "real_estate",
+    "GLD": "precious_metals", "IAU": "precious_metals", "SLV": "precious_metals",
+    "TLT": "rates", "IEF": "rates", "SHY": "rates", "UUP": "fx"
+  }
+}
