@@ -41,8 +41,18 @@ def test_s01_respects_position_cap_after_risk(small_panel, sector_map):
     res = BacktestEngine(risk_manager=rm).run(
         S01TrendFollowing(cfg), small_panel, sector_map=sector_map
     )
-    # No held weight may exceed the configured single-name cap.
-    assert res.weights.abs().max().max() <= 0.15 + 1e-9
+    # Caps constrain allocations. Fixed quantities subsequently drift with prices
+    # and cash costs; clipping those marked weights would create unfilled trades.
+    filled = [o for o in res.orders if o.status.name == "FILLED"]
+    assert filled
+    assert all(0 <= o.target_weight <= 0.15 + 1e-9 for o in filled)
+    for order in filled:
+        allocated_weight = ((order.quantity_before + order.executed_quantity)
+                            * order.fill_price / order.allocation_equity)
+        np.testing.assert_allclose(allocated_weight, order.target_weight, atol=1e-12)
+    assert not (res.marks.isna() & res.quantities.ne(0)).to_numpy().any()
+    actual_weights = (res.quantities * res.marks).fillna(0).div(res.equity_curve, axis=0)
+    np.testing.assert_allclose(res.weights, actual_weights, atol=1e-12)
 
 
 def test_s01_signals_causal(small_panel):

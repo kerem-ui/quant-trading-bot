@@ -34,7 +34,7 @@
       "trailing_stop_atr_multiple": 3.0,
       "target_vol_annual": 0.10,
       "max_weight_per_symbol": 0.15,
-      "long_short": true,
+      "long_short": false,
       "cost_filter_multiplier": 4.0,
       "rebalance_band": 0.02,
       "min_holding_days": 20,

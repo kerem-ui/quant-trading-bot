@@ -15,6 +15,7 @@ Cost filter: a trade is only worthwhile if
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 
 from .slippage import SlippageModel
 
@@ -59,8 +60,10 @@ class EquityCostModel:
 class OptionsCostModel:
     """Defined-risk options structures only (no naked shorts in v1).
 
-    Cost per leg = per-contract fee + ``bid_ask_fraction`` of the leg's
-    bid/ask width, with a flat multi-leg penalty added once per structure.
+    ``structure_cost`` estimates costs relative to midpoint (used by parity
+    research). Bid/ask executions use ``execution_costs`` instead: crossing
+    is already in their premium cash flow and must not be charged again.
+    The existing multi-leg penalty is explicit additional dollar slippage.
     """
 
     per_contract_fee: float = 0.65
@@ -81,6 +84,16 @@ class OptionsCostModel:
         if len(legs) > 1:
             total += self.multi_leg_penalty
         return total
+
+    def execution_costs(self, legs: list[dict]) -> dict[str, float]:
+        """Separate fees and extra slippage for fills already crossing bid/ask."""
+        if any(not isfinite(v) or v < 0
+               for v in (self.per_contract_fee, self.multi_leg_penalty)):
+            raise ValueError("execution costs must be finite and nonnegative")
+        commission = self.per_contract_fee * sum(abs(l["contracts"]) for l in legs)
+        slippage = self.multi_leg_penalty if len(legs) > 1 else 0.0
+        return {"commission": float(commission), "slippage": float(slippage),
+                "spread_cost": 0.0, "total": float(commission + slippage)}
 
 
 @dataclass

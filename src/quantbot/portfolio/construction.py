@@ -10,6 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from ..risk.risk_manager import reduce_net_exposure
+
 
 def equal_weight(signals: pd.Series) -> pd.Series:
     """Equal weight across non-zero signals, preserving long/short sign.
@@ -60,6 +62,10 @@ def apply_constraints(weights: pd.Series, constraints: dict) -> pd.Series:
     portfolio code can be unit-tested in isolation.
     """
     w = weights.copy()
+    for key in ("max_single_symbol_weight", "max_gross_exposure", "max_net_exposure"):
+        value = constraints.get(key)
+        if value is not None and (not np.isfinite(value) or value < 0):
+            raise ValueError(f"{key} must be finite and nonnegative")
     max_single = constraints.get("max_single_symbol_weight")
     if max_single is not None:
         w = w.clip(-max_single, max_single)
@@ -68,7 +74,8 @@ def apply_constraints(weights: pd.Series, constraints: dict) -> pd.Series:
         gross = w.abs().sum()
         if gross > max_gross and gross > 0:
             w *= max_gross / gross
-    return w
+    max_net = constraints.get("max_net_exposure")
+    return reduce_net_exposure(w, max_net) if max_net is not None else w
 
 
 def combine_strategy_weights(

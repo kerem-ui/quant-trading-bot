@@ -7,6 +7,17 @@ Greeks live in :mod:`quantbot.options.greeks`; this aggregates a book.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
+
+
+def defined_loss_magnitude(signed_max_loss: float) -> float:
+    """Convert nonpositive worst-case dollar P&L to a nonnegative dollar loss.
+
+    Unknown/unbounded values are not zero risk; reject them explicitly.
+    """
+    if signed_max_loss is None or not isfinite(signed_max_loss) or signed_max_loss > 0:
+        raise ValueError("defined maximum loss must be finite signed P&L <= 0")
+    return -float(signed_max_loss)
 
 
 @dataclass
@@ -16,6 +27,10 @@ class PortfolioGreeks:
     theta: float = 0.0
     vega: float = 0.0
     max_loss: float = 0.0  # total defined max loss across structures (>= 0)
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.max_loss) or self.max_loss < 0:
+            raise ValueError("portfolio max_loss must be a finite nonnegative dollar loss amount")
 
     def add(self, other: "PortfolioGreeks") -> "PortfolioGreeks":
         return PortfolioGreeks(
@@ -42,7 +57,7 @@ def aggregate_structure_greeks(structures: list) -> PortfolioGreeks:
                 g.get("gamma", 0.0),
                 g.get("theta", 0.0),
                 g.get("vega", 0.0),
-                float(ml) if ml is not None and ml == ml else 0.0,
+                defined_loss_magnitude(ml),
             )
         )
     return agg
@@ -52,6 +67,7 @@ def options_loss_within_limit(
     total_defined_loss: float, equity: float, max_fraction: float
 ) -> bool:
     """True if aggregate defined options loss is within the equity fraction cap."""
-    if equity <= 0:
+    if (not all(isfinite(v) for v in (total_defined_loss, equity, max_fraction))
+            or equity <= 0 or total_defined_loss < 0 or not 0 <= max_fraction <= 1):
         return False
     return (total_defined_loss / equity) <= max_fraction

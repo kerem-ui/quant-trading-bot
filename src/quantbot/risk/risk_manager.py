@@ -13,7 +13,9 @@ backtest engine turns them into orders. The pipeline (in order):
      scale-up is still hard-bounded by ``max_vol_scale`` and the gross cap.
   5. Per-symbol caps - clip any name to the max single-symbol weight.
   6. Sector / asset-class caps - scale offending sectors down.
-  7. Gross / net exposure caps - final clamp.
+  7. Gross / net exposure caps - shrink only, without creating positions.
+  8. Restore requested neutrality by reducing the overweight side; validate
+     ALL caps, strategy per-name limits, long-only and neutrality together.
 
 Conservative by construction: scale-up is opt-in and bounded; the gross/net
 caps in step 7 always have the final say, so realised leverage can never
@@ -31,6 +33,17 @@ from ..utils.math import TRADING_DAYS_PER_YEAR
 from .drawdown import current_drawdown
 
 
+def reduce_net_exposure(weights: pd.Series, limit: float) -> pd.Series:
+    """Reduce only the overweight side; never grow, reverse, or create a position."""
+    w = weights.copy()
+    net = float(w.sum())
+    if abs(net) > limit:
+        side = w > 0 if net > 0 else w < 0
+        gross_side = float(w[side].abs().sum())
+        w.loc[side] *= max(0.0, 1.0 - (abs(net) - limit) / gross_side)
+    return w
+
+
 @dataclass
 class RiskState:
     """Outcome of one risk evaluation, recorded by the engine for reporting."""
@@ -46,6 +59,12 @@ class RiskState:
 
 class RiskManager:
     def __init__(self, risk_config: dict):
+        from ..config import RISK_FIELDS
+        unknown = set(risk_config) - RISK_FIELDS - {"_comment"}
+        if unknown:
+            raise ValueError(f"unknown risk configuration fields: {sorted(unknown)}")
+        if not isinstance(risk_config.get("allow_leverage_up", False), bool):
+            raise ValueError("allow_leverage_up must be boolean")
         c = risk_config
         self.target_vol = float(c.get("portfolio_vol_target_annual", 0.10))
         self.max_gross = float(c.get("max_gross_exposure", 1.50))
@@ -62,6 +81,13 @@ class RiskManager:
         # gross cap (step 7), so leverage stays <= max_gross_exposure.
         self.allow_leverage_up = bool(c.get("allow_leverage_up", False))
         self.max_vol_scale = float(c.get("max_vol_scale", 4.0))
+        for name in ("target_vol", "max_gross", "max_net", "max_single", "max_sector",
+                     "max_daily_loss", "dd_kill", "dd_pause", "vol_spike_kill", "max_vol_scale"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if not np.isfinite(self.derisk_factor) or not 0 <= self.derisk_factor <= 1:
+            raise ValueError("risk_reduction_factor_on_daily_loss must be in [0, 1]")
 
     # --- individual controls ------------------------------------------------
     def volatility_target_scale(
@@ -119,10 +145,8 @@ class RiskManager:
     def apply_sector_caps(
         self, weights: pd.Series, sector_map: dict[str, str] | None
     ) -> pd.Series:
-        if not sector_map:
-            return weights
         w = weights.copy()
-        sectors = pd.Series({s: sector_map.get(s, s) for s in w.index})
+        sectors = self._sectors(w, sector_map)
         for sec in sectors.unique():
             members = sectors.index[sectors == sec]
             gross = w[members].abs().sum()
@@ -135,11 +159,29 @@ class RiskManager:
         gross = w.abs().sum()
         if gross > self.max_gross and gross > 0:
             w = w * (self.max_gross / gross)
-        net = w.sum()
-        if abs(net) > self.max_net and abs(net) > 0:
-            # Shrink the net by removing a uniform tilt, keep relative bets.
-            w = w - (net - np.sign(net) * self.max_net) / len(w)
-        return w
+        return reduce_net_exposure(w, self.max_net)
+
+    @staticmethod
+    def _sectors(weights: pd.Series, sector_map: dict | None) -> pd.Series:
+        # Unknown classifications are one conservative group, not independent
+        # invented sectors that can collectively evade the configured cap.
+        return pd.Series({s: (sector_map or {}).get(s) or "__unmapped__"
+                          for s in weights.index}, dtype=object)
+
+    def validate_final(self, weights: pd.Series, *, sector_map: dict | None = None,
+                       strategy_max_weight: float | None = None,
+                       long_only: bool = False, market_neutral: bool = False) -> None:
+        """Fail explicitly if any hard constraint is violated after all transforms."""
+        cap = min(self.max_single, strategy_max_weight) if strategy_max_weight is not None else self.max_single
+        tol = 1e-10
+        sectors = self._sectors(weights, sector_map)
+        if (not weights.index.is_unique or not np.isfinite(weights.to_numpy()).all()
+                or (weights.abs() > cap + tol).any()
+                or weights.abs().sum() > self.max_gross + tol
+                or abs(weights.sum()) > (0.0 if market_neutral else self.max_net) + tol
+                or (long_only and (weights < -tol).any())
+                or (weights.abs().groupby(sectors).sum() > self.max_sector + tol).any()):
+            raise ValueError("final portfolio violates a hard risk constraint")
 
     # --- orchestration ------------------------------------------------------
     def process(
@@ -155,9 +197,18 @@ class RiskManager:
         vol_spike_ratio: float | None = None,
         allow_leverage_up: bool | None = None,
         market_neutral: bool = False,
+        strategy_max_weight: float | None = None,
+        long_only: bool = False,
     ) -> tuple[pd.Series, RiskState]:
         state = RiskState()
         w = target_weights.copy().astype(float).fillna(0.0)
+        if not w.index.is_unique or not np.isfinite(w.to_numpy()).all():
+            raise ValueError("target weights must be finite with unique instruments")
+        if strategy_max_weight is not None and (
+                not np.isfinite(strategy_max_weight) or strategy_max_weight < 0):
+            raise ValueError("strategy_max_weight must be finite and nonnegative")
+        if long_only:
+            w = w.clip(lower=0.0)
 
         # 1. Portfolio kill switch.
         if portfolio_equity is not None and len(portfolio_equity) > 1:
@@ -199,12 +250,22 @@ class RiskManager:
             allow_leverage_up=allow_leverage_up,
             market_neutral=market_neutral,
         )
+        if state.derisk_factor < 1:
+            state.vol_scale = min(state.vol_scale, 1.0)
         w = w * state.vol_scale
 
         # 5-7. Caps.
         w = self.apply_position_caps(w)
+        if strategy_max_weight is not None:
+            w = w.clip(-strategy_max_weight, strategy_max_weight)
+        if any((sector_map or {}).get(s) is None for s in w.index[w != 0]):
+            state.notes.append("unmapped instruments share one conservative asset-class cap")
         w = self.apply_sector_caps(w, sector_map)
         w = self.apply_exposure_caps(w)
+        if market_neutral:
+            w = reduce_net_exposure(w, 0.0)
+        self.validate_final(w, sector_map=sector_map, strategy_max_weight=strategy_max_weight,
+                            long_only=long_only, market_neutral=market_neutral)
 
         state.gross_exposure = float(w.abs().sum())
         state.net_exposure = float(w.sum())

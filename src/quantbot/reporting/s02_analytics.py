@@ -6,11 +6,9 @@ done by ``scripts/report_s02_v3.py``.
 
 Contribution convention
 -----------------------
-The engine computes the day-d portfolio return from the weights held at the
-*start* of day d, i.e. the post-execution weights recorded on day d-1. So the
-correct per-symbol daily contribution is ``weights.shift(1) * asset_returns``;
-summed across symbols this reproduces ``result.returns`` (gross of cost, which
-the engine deducts separately from equity).
+Contributions use the engine's actual per-symbol marked dollar P&L, less that
+symbol's trading and borrowing costs, divided by prior ending equity. This
+includes execution-day intraday P&L and sums to the reported NET return.
 """
 
 from __future__ import annotations
@@ -39,15 +37,15 @@ def aligned_asset_returns(result, panel: dict[str, pd.DataFrame],
 
 
 def contribution_frame(result, panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Per-symbol daily return contribution (date x symbol).
+    """Per-symbol NET contribution from recorded holdings P&L and actual costs.
 
-    ``c_{s,d} = w_{s,d-1} * r_{s,d}``;  ``sum_s c_{s,d} ~= result.returns``.
+    ``panel`` remains in the public reporting interface; it is not used to
+    reconstruct trades from drifting weights or to replace missing marks.
     """
-    w = result.weights.fillna(0.0)
-    rets = aligned_asset_returns(result, panel)
-    cols = w.columns.intersection(rets.columns)
-    contrib = (w[cols].shift(1) * rets[cols]).fillna(0.0)
-    return contrib
+    starting_equity = result.equity_curve.shift(1)
+    starting_equity.iloc[0] = result.initial_capital
+    net_pnl = result.gross_pnl - result.trading_costs - result.borrow_costs
+    return net_pnl.div(starting_equity, axis=0)
 
 
 def _years(idx: pd.Index) -> float:
@@ -69,7 +67,7 @@ def etf_contribution(result, panel: dict[str, pd.DataFrame]) -> dict:
     held = w.where(w.abs() > 1e-9)
     avg_weight_when_held = held.mean()
     days_held = (w.abs() > 1e-9).sum()
-    turnover_by_etf = (w.diff().abs().sum() / years).sort_values(ascending=False)
+    turnover_by_etf = (result.turnover_by_symbol.sum() / years).sort_values(ascending=False)
 
     summary = pd.DataFrame({
         "total_contribution": by_etf,

@@ -7,11 +7,13 @@ Mechanics, not strategy quality. The engine is intentionally minimal:
   - Open positions are marked-to-market each bar using conservative quotes
     (longs at BID, shorts at ASK).
   - On a leg's expiration date the position settles to intrinsic value
-    using the underlying's spot from any chain row on that date.
+    using a validated same-underlying spot on that exact date (research cash
+    settlement, not physical American exercise/assignment).
   - Defined-risk only: candidates flagged ``is_naked`` are rejected.
   - Costs (entry + close) are charged through ``OptionsCostModel``.
   - At the final bar any still-open position is force-closed at the
-    conservative MTM (with cost).
+    executable bid/ask (with fees), under the normal spread gate. A missing
+    required mark or unexecutable terminal close aborts explicitly.
 
 Causality guarantee
 -------------------
@@ -80,6 +82,11 @@ class TradeRecord:
     max_profit: float
     max_loss: float
     legs: list[dict] = field(default_factory=list)
+    net_exit_cash: float = 0.0
+    open_commission: float = 0.0
+    open_slippage: float = 0.0
+    close_commission: float = 0.0
+    close_slippage: float = 0.0
 
 
 @dataclass
@@ -94,6 +101,7 @@ class OptionsBacktestResult:
     rejections: list[Rejection]
     total_cost: float
     config: dict = field(default_factory=dict)
+    event_ledger: list[dict] = field(default_factory=list)
 
     # --- metrics ------------------------------------------------------- #
     @property
@@ -152,6 +160,11 @@ class OptionsBacktestResult:
                 "max_profit": t.max_profit,
                 "max_loss": t.max_loss,
                 "realized_pnl": t.realized_pnl,
+                "net_exit_cash": t.net_exit_cash,
+                "open_commission": t.open_commission,
+                "open_slippage": t.open_slippage,
+                "close_commission": t.close_commission,
+                "close_slippage": t.close_slippage,
             })
         return pd.DataFrame(rows)
 
@@ -165,12 +178,6 @@ class _PortfolioView:
     equity: float
     open_positions: int
     portfolio_defined_loss: float
-
-
-def _spot_on(chain_today: pd.DataFrame) -> float:
-    if chain_today.empty:
-        return float("nan")
-    return float(chain_today["underlying_price"].iloc[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -217,17 +224,74 @@ class OptionsBacktestEngine:
         self._equity_records: list[dict] = []
         self._greeks_records: list[dict] = []
         self._total_cost: float = 0.0
+        self._event_ledger: list[dict] = []
+
+    def _record_event(self, t: pd.Timestamp, event: str) -> None:
+        """Snapshot cash and signed holdings at their latest valid marks.
+
+        Each mark carries its own date; end-of-day marks are always current.
+        Reconcile both the balance sheet and cumulative position P&L.
+        """
+        active = [p for p in self._open_positions if not p.closed]
+        holdings = [dict(underlying=l.underlying, expiration=l.expiration,
+                         option_type=l.option_type, strike=l.strike, qty=l.qty,
+                         multiplier=l.multiplier, mark_price=l.mark_price,
+                         mark_date=l.mark_date) for p in active for l in p.legs]
+        equity = self._cash + sum(p.last_mtm_value for p in active)
+        realized = sum(tr.realized_pnl for tr in self._trades)
+        unrealized = sum(p.paper_pnl for p in active)
+        marked = sum(l["qty"] * l["multiplier"] * l["mark_price"] for l in holdings)
+        if not (np.isfinite(equity)
+                and np.isclose(self._cash + marked, equity, rtol=1e-12, atol=1e-8)
+                and np.isclose(self.initial_capital + realized + unrealized, equity,
+                               rtol=1e-12, atol=1e-8)):
+            raise ValueError(f"option accounting reconciliation failed on {t.date()}: {event}")
+        self._event_ledger.append(dict(date=t, event=event, cash=self._cash,
+            equity=equity, holdings=holdings, realized_pnl=realized,
+            unrealized_pnl=unrealized))
+
+    @staticmethod
+    def _leg_records(pos: BacktestPosition, fills=None, *, spot=None) -> list[dict]:
+        """Executed premium/settlement details; qty is signed transaction quantity."""
+        records = []
+        for i, leg in enumerate(pos.legs):
+            qty, price = leg.qty, leg.fill_price
+            if fills is not None:
+                qty, price = -qty, fills[i].fill_price
+            elif spot is not None:
+                qty = -qty
+                price = max(0.0, spot-leg.strike) if leg.option_type == "call" else max(0.0, leg.strike-spot)
+            records.append(dict(underlying=leg.underlying, expiration=leg.expiration,
+                option_type=leg.option_type, strike=leg.strike, qty=qty,
+                multiplier=leg.multiplier, fill_price=price,
+                side="buy" if qty > 0 else "sell", notional=abs(qty)*price*leg.multiplier,
+                cash_flow=-qty*price*leg.multiplier))
+        return records
+
+    def _record_trade(self, pos: BacktestPosition, decision_date) -> None:
+        self._trades.append(TradeRecord(
+            structure=pos.structure_name, underlying=pos.underlying,
+            decision_open=pos.decision_date, fill_open=pos.fill_date,
+            decision_close=decision_date, fill_close=pos.close_date,
+            close_reason=pos.close_reason, net_entry_cash=pos.net_entry_cash,
+            open_cost=pos.open_cost, close_cost=pos.close_cost,
+            realized_pnl=pos.realized_pnl, width=pos.width,
+            max_profit=pos.max_profit, max_loss=pos.max_loss,
+            legs=self._leg_records(pos), net_exit_cash=pos.net_exit_cash,
+            open_commission=pos.open_commission, open_slippage=pos.open_slippage,
+            close_commission=pos.close_commission, close_slippage=pos.close_slippage))
 
     # ---------------------------------------------------------------- #
     @property
     def _portfolio_defined_loss(self) -> float:
-        return float(sum(abs(p.max_loss) for p in self._open_positions))
+        return float(sum(abs(p.max_loss) for p in self._open_positions if not p.closed))
 
     def _portfolio_view(self) -> _PortfolioView:
-        equity = self._cash + sum(p.last_mtm_value for p in self._open_positions)
+        active = [p for p in self._open_positions if not p.closed]
+        equity = self._cash + sum(p.last_mtm_value for p in active)
         return _PortfolioView(
             cash=self._cash, equity=equity,
-            open_positions=len(self._open_positions),
+            open_positions=len(active),
             portfolio_defined_loss=self._portfolio_defined_loss,
         )
 
@@ -247,6 +311,18 @@ class OptionsBacktestEngine:
                 f"cannot fill {t}"
             )
             cand = po.candidate
+            if cand.expiration <= t:
+                self._rejections.append(Rejection(
+                    t, "fill_open", "expiration_on_or_before_fill",
+                    {"underlying": cand.underlying, "expiration": str(cand.expiration)}))
+                continue
+            if any(leg["underlying"] != cand.underlying
+                   or leg["expiration"] != cand.expiration
+                   or leg["multiplier"] != 100 for leg in cand.legs):
+                self._rejections.append(Rejection(t, "fill_open",
+                    "unsupported_or_mismatched_contract_identity",
+                    {"underlying": cand.underlying, "legs": cand.legs}))
+                continue
 
             # Re-fill at TODAY's quotes (the spread-builder fill was a
             # decision-day snapshot used only to size risk; the real
@@ -255,7 +331,7 @@ class OptionsBacktestEngine:
             ok = True
             for leg in cand.legs:
                 row = cs.lookup_row(
-                    chain_today, expiration=cand.expiration,
+                    chain_today, underlying=cand.underlying, expiration=cand.expiration,
                     option_type=leg["option_type"], strike=leg["strike"],
                 )
                 if row is None:
@@ -263,7 +339,8 @@ class OptionsBacktestEngine:
                     self._rejections.append(Rejection(
                         date=t, stage="fill_open",
                         reason="leg_missing_on_fill_day",
-                        meta={"leg": leg, "expiration": str(cand.expiration.date())},
+                        meta={"leg": leg, "underlying": cand.underlying,
+                              "expiration": str(cand.expiration.date())},
                     ))
                     break
                 rows.append(row)
@@ -292,7 +369,7 @@ class OptionsBacktestEngine:
             # but the strategy/spread builder owns those formulas; here we
             # rebuild the canonical defined-risk numbers from the candidate's
             # ``width`` and net cash, matching ``build_bull_call_spread``.
-            width_cash = cand.width * 100.0
+            width_cash = cand.width * 100.0 * abs(cand.legs[0]["qty"])
             if debit > 0:
                 max_loss = -debit
                 max_profit = max(0.0, width_cash - debit)
@@ -310,7 +387,7 @@ class OptionsBacktestEngine:
             ctmp.is_naked = bool(cand.is_naked)
             decision = evaluate_candidate(
                 ctmp, self.limits,
-                current_open_positions=len(self._open_positions),
+                current_open_positions=sum(not p.closed for p in self._open_positions),
                 initial_capital=self.initial_capital,
                 current_portfolio_defined_loss=self._portfolio_defined_loss,
             )
@@ -331,6 +408,7 @@ class OptionsBacktestEngine:
                     strike=float(leg["strike"]),
                     qty=int(leg["qty"]),
                     fill_price=float(fr.fill_price),
+                    underlying=cand.underlying,
                 ))
             pos = BacktestPosition(
                 structure_name=cand.structure_name,
@@ -345,7 +423,11 @@ class OptionsBacktestEngine:
                 max_loss=float(max_loss),
                 width=float(cand.width),
                 is_naked=bool(cand.is_naked),
+                open_commission=fill.commission,
+                open_slippage=fill.slippage,
             )
+            # Establish a complete valid mark before booking any cash/holdings.
+            pos.mark(chain_today, t)
             # Cash flow at open: net_cash is signed; cost is always a debit.
             self._cash += net_cash - fill.cost
             self._total_cost += float(fill.cost)
@@ -357,10 +439,15 @@ class OptionsBacktestEngine:
                 "structure": cand.structure_name,
                 "net_cash": net_cash,
                 "cost": fill.cost,
-                "legs": list(cand.legs),
+                "commission": fill.commission,
+                "slippage": fill.slippage,
+                "spread_cost": 0.0,
+                "legs": self._leg_records(pos),
+                "underlying": pos.underlying,
                 "expiration": cand.expiration,
                 "meta": dict(cand.meta),
             })
+            self._record_event(t, "open")
         # All processed; clear queue.
         self._pending_opens = still_pending  # always empty here
 
@@ -382,16 +469,17 @@ class OptionsBacktestEngine:
             failed_reason = ""
             for leg in pos.legs:
                 row = cs.lookup_row(
-                    chain_today, expiration=leg.expiration,
+                    chain_today, underlying=pos.underlying, expiration=leg.expiration,
                     option_type=leg.option_type, strike=leg.strike,
                 )
                 if row is None:
-                    failed_reason = "leg_missing_on_close_day"
+                    failed_reason = f"leg_missing_on_close_day: {leg.identity} on {t.date()}"
                     break
                 fr = close_leg(row, leg.qty,
-                                spread_max_pct=self.limits.spread_max_pct)
+                                spread_max_pct=self.limits.spread_max_pct,
+                                multiplier=leg.multiplier)
                 if not fr.accepted:
-                    failed_reason = fr.reject_reason
+                    failed_reason = f"{fr.reject_reason}: {leg.identity} on {t.date()}"
                     break
                 results.append(fr)
                 close_cash += leg.qty * fr.fill_price * leg.multiplier
@@ -411,8 +499,11 @@ class OptionsBacktestEngine:
                 ))
                 continue
 
-            cost = self.cost_model.structure_cost(cost_legs)
+            costs = self.cost_model.execution_costs(cost_legs)
+            cost = costs["total"]
             pos.close_at(results, t, cost=cost, reason=pc.reason)
+            pos.close_commission = costs["commission"]
+            pos.close_slippage = costs["slippage"]
             self._cash += close_cash - cost
             self._total_cost += float(cost)
             self._orders.append({
@@ -422,30 +513,15 @@ class OptionsBacktestEngine:
                 "structure": pos.structure_name,
                 "close_cash": close_cash,
                 "cost": cost,
+                "commission": costs["commission"],
+                "slippage": costs["slippage"],
+                "spread_cost": 0.0,
                 "reason": pc.reason,
+                "underlying": pos.underlying,
+                "legs": self._leg_records(pos, results),
             })
-            self._trades.append(TradeRecord(
-                structure=pos.structure_name,
-                underlying=pos.underlying,
-                decision_open=pos.decision_date,
-                fill_open=pos.fill_date,
-                decision_close=pc.decision_date,
-                fill_close=t, close_reason=pc.reason,
-                net_entry_cash=pos.net_entry_cash,
-                open_cost=pos.open_cost,
-                close_cost=pos.close_cost,
-                realized_pnl=pos.realized_pnl,
-                width=pos.width,
-                max_profit=pos.max_profit,
-                max_loss=pos.max_loss,
-                legs=[{
-                    "option_type": L.option_type,
-                    "strike": L.strike,
-                    "qty": L.qty,
-                    "fill_price": L.fill_price,
-                    "expiration": L.expiration,
-                } for L in pos.legs],
-            ))
+            self._record_trade(pos, pc.decision_date)
+            self._record_event(t, "close")
         # Reset queue: only carry the deferrals.
         self._pending_closes = self._pending_closes_next
         self._pending_closes_next = []
@@ -457,20 +533,13 @@ class OptionsBacktestEngine:
         for pos in list(self._open_positions):
             if pos.closed:
                 continue
+            if pd.Timestamp(pos.expiration) < pd.Timestamp(t):
+                raise ValueError(f"missing expiration observation for {pos.underlying} "
+                                 f"{pos.expiration.date()} before {t.date()}")
             if pd.Timestamp(pos.expiration).normalize() != pd.Timestamp(t).normalize():
                 continue
-            # Use spot from today's chain.
+            spot, terminal_cash = pos.expiration_value(chain_today, t)
             pos.settle_at_expiration(chain_today, t)
-            # Cash flow on expiration: terminal intrinsic cash for each leg.
-            # Recompute to apply to engine cash.
-            spot = _spot_on(chain_today)
-            terminal_cash = 0.0
-            for leg in pos.legs:
-                if leg.option_type == "call":
-                    intrinsic = max(0.0, spot - leg.strike)
-                else:
-                    intrinsic = max(0.0, leg.strike - spot)
-                terminal_cash += leg.qty * intrinsic * leg.multiplier
             self._cash += terminal_cash
             self._orders.append({
                 "type": "expire",
@@ -480,29 +549,13 @@ class OptionsBacktestEngine:
                 "terminal_cash": terminal_cash,
                 "spot": spot,
                 "reason": "expiration",
+                "underlying": pos.underlying,
+                "legs": self._leg_records(pos, spot=spot),
+                "cost": 0.0, "commission": 0.0, "slippage": 0.0, "spread_cost": 0.0,
+                "settlement_convention": "intrinsic_cash",
             })
-            self._trades.append(TradeRecord(
-                structure=pos.structure_name,
-                underlying=pos.underlying,
-                decision_open=pos.decision_date,
-                fill_open=pos.fill_date,
-                decision_close=None,
-                fill_close=t, close_reason="expiration",
-                net_entry_cash=pos.net_entry_cash,
-                open_cost=pos.open_cost,
-                close_cost=pos.close_cost,
-                realized_pnl=pos.realized_pnl,
-                width=pos.width,
-                max_profit=pos.max_profit,
-                max_loss=pos.max_loss,
-                legs=[{
-                    "option_type": L.option_type,
-                    "strike": L.strike,
-                    "qty": L.qty,
-                    "fill_price": L.fill_price,
-                    "expiration": L.expiration,
-                } for L in pos.legs],
-            ))
+            self._record_trade(pos, None)
+            self._record_event(t, "expire")
 
     # ---------------------------------------------------------------- #
     def _mark_all(self, t: pd.Timestamp, chain_today: pd.DataFrame) -> dict:
@@ -545,20 +598,20 @@ class OptionsBacktestEngine:
             failed = False
             for leg in pos.legs:
                 row = cs.lookup_row(
-                    chain_today, expiration=leg.expiration,
+                    chain_today, underlying=pos.underlying, expiration=leg.expiration,
                     option_type=leg.option_type, strike=leg.strike,
                 )
                 if row is None:
                     failed = True
+                    failed_reason = "missing quote"
                     break
                 fr = close_leg(row, leg.qty,
-                                spread_max_pct=1.0)   # relax gate on force close
+                                spread_max_pct=self.limits.spread_max_pct,
+                                multiplier=leg.multiplier)
                 if not fr.accepted:
-                    # Use mid as best-effort exit if quotes are degenerate.
-                    bid = float(row["bid"]); ask = float(row["ask"])
-                    mid = max(0.0, (bid + ask) / 2.0)
-                    fr = type(fr)(True, mid, "sell" if leg.qty > 0 else "buy",
-                                   bid, ask, 0.0, "")
+                    failed = True
+                    failed_reason = fr.reject_reason
+                    break
                 results.append(fr)
                 close_cash += leg.qty * fr.fill_price * leg.multiplier
                 cost_legs.append({"contracts": abs(leg.qty),
@@ -566,12 +619,16 @@ class OptionsBacktestEngine:
             if failed:
                 self._rejections.append(Rejection(
                     date=t, stage="fill_close",
-                    reason="force_close_leg_missing",
-                    meta={"structure": pos.structure_name},
+                    reason=failed_reason,
+                    meta={"structure": pos.structure_name, "contract": leg.identity},
                 ))
-                continue
-            cost = self.cost_model.structure_cost(cost_legs)
+                raise ValueError(f"terminal exit failed for {leg.identity} on {t.date()}: "
+                                 f"{failed_reason}; entire structure remains open")
+            costs = self.cost_model.execution_costs(cost_legs)
+            cost = costs["total"]
             pos.close_at(results, t, cost=cost, reason="force_close_final_bar")
+            pos.close_commission = costs["commission"]
+            pos.close_slippage = costs["slippage"]
             self._cash += close_cash - cost
             self._total_cost += float(cost)
             self._orders.append({
@@ -581,30 +638,15 @@ class OptionsBacktestEngine:
                 "structure": pos.structure_name,
                 "close_cash": close_cash,
                 "cost": cost,
+                "commission": costs["commission"],
+                "slippage": costs["slippage"],
+                "spread_cost": 0.0,
                 "reason": "force_close_final_bar",
+                "underlying": pos.underlying,
+                "legs": self._leg_records(pos, results),
             })
-            self._trades.append(TradeRecord(
-                structure=pos.structure_name,
-                underlying=pos.underlying,
-                decision_open=pos.decision_date,
-                fill_open=pos.fill_date,
-                decision_close=None,
-                fill_close=t, close_reason="force_close_final_bar",
-                net_entry_cash=pos.net_entry_cash,
-                open_cost=pos.open_cost,
-                close_cost=pos.close_cost,
-                realized_pnl=pos.realized_pnl,
-                width=pos.width,
-                max_profit=pos.max_profit,
-                max_loss=pos.max_loss,
-                legs=[{
-                    "option_type": L.option_type,
-                    "strike": L.strike,
-                    "qty": L.qty,
-                    "fill_price": L.fill_price,
-                    "expiration": L.expiration,
-                } for L in pos.legs],
-            ))
+            self._record_trade(pos, None)
+            self._record_event(t, "close")
 
     # ---------------------------------------------------------------- #
     def run(self) -> OptionsBacktestResult:
@@ -617,6 +659,10 @@ class OptionsBacktestEngine:
             chain_today = self._chain_on(t)
             is_last = (i == len(self._dates) - 1)
 
+            # Expired contracts cannot execute on a later bar. Expiry is an
+            # intrinsic cash event, before queued orders at the daily quote.
+            self._settle_expirations(t, chain_today)
+
             # 1) Execute orders queued from prior decision dates.
             #    Opens use today's quotes; closes use today's quotes.
             #    (decision_date < t is asserted inside.)
@@ -625,13 +671,10 @@ class OptionsBacktestEngine:
             if self._pending_closes:
                 self._execute_pending_closes(t, chain_today)
 
-            # 2) Settle any expirations occurring TODAY (after opens/closes
-            #    so a position newly closed earlier today won't double-settle).
-            self._settle_expirations(t, chain_today)
-
             # 3) Mark every open position to market.
             greeks_rec = self._mark_all(t, chain_today)
             self._greeks_records.append(greeks_rec)
+            self._record_event(t, "mark")
 
             # 4) Strategy decisions for the NEXT bar (closes first, opens
             #    second -- so a same-day exit signal does not block a new
@@ -684,7 +727,8 @@ class OptionsBacktestEngine:
             if is_last:
                 self._force_close_remaining(t, chain_today)
                 # Re-mark to update equity after force close.
-                self._mark_all(t, chain_today)
+                self._greeks_records[-1] = self._mark_all(t, chain_today)
+                self._record_event(t, "mark")
 
             # 6) Record equity at end of bar.
             self._record_equity(t)
@@ -717,6 +761,7 @@ class OptionsBacktestEngine:
             orders=list(self._orders),
             rejections=list(self._rejections),
             total_cost=float(self._total_cost),
+            event_ledger=list(self._event_ledger),
             config={
                 "strategy": getattr(self.strategy, "name", "unknown"),
                 "underlying": getattr(self.strategy, "underlying", ""),
@@ -727,5 +772,9 @@ class OptionsBacktestEngine:
                     "multi_leg_penalty": self.cost_model.multi_leg_penalty,
                 },
                 "n_dates": len(self._dates),
+                "settlement": "exact-expiry intrinsic cash research convention",
+                "missing_marks": "raise; preserve last valid state; no completed result",
+                "terminal_exit": "normal bid/ask gates or raise; never midpoint",
+                "execution_costs": "commission + multi_leg_penalty; spread already in fills",
             },
         )

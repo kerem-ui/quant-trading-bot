@@ -35,6 +35,10 @@ class Order:
     fill_price: float | None = None
     cost: float = 0.0
     note: str = ""
+    executed_quantity: float = 0.0  # signed adjusted-price research units
+    notional: float = 0.0  # absolute executed dollar notional
+    quantity_before: float = 0.0
+    allocation_equity: float = 0.0  # common pre-cost execution-batch equity
 
     def __post_init__(self) -> None:
         if pd.Timestamp(self.execution_date) <= pd.Timestamp(self.signal_date):
@@ -50,4 +54,5 @@ class Order:
 
     @property
     def side(self) -> OrderSide:
-        return OrderSide.BUY if self.delta_weight >= 0 else OrderSide.SELL
+        direction = self.executed_quantity if self.status == OrderStatus.FILLED else self.delta_weight
+        return OrderSide.BUY if direction >= 0 else OrderSide.SELL

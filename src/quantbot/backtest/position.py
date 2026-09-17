@@ -1,47 +1,91 @@
-"""Portfolio state for the weight-based backtester.
+"""Cash and signed adjusted-price units for ETF research accounting.
 
-Simplification (documented): between rebalances, weights are held constant
-(no intra-period drift rebalancing). Turnover cost is charged on the change in
-target weights at each execution. This is a standard, transparent research
-approximation; it slightly understates drift turnover and is conservative
-enough for v1.
+Units are not raw broker shares: see docs/phase1a_etf_accounting.md.
+Only executed fills change quantities. Weights and equity are derived marks.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite, isclose
 
 import pandas as pd
+
+from .order import Order, OrderStatus
+
+
+def required_mark(value: float | None, symbol: str, date: pd.Timestamp) -> float:
+    """Validate a required economic price, including its instrument and date."""
+    if value is None or pd.isna(value) or not isfinite(value) or value <= 0:
+        raise ValueError(f"Invalid valuation price for {symbol} on {pd.Timestamp(date).date()}: {value}")
+    return float(value)
 
 
 @dataclass
 class Portfolio:
     initial_capital: float = 1_000_000.0
-    equity: float = field(init=False)
-    weights: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
-    cumulative_cost: float = 0.0
+    cash: float = field(init=False)
+    quantities: dict[str, float] = field(default_factory=dict, init=False)
+    marks: dict[str, float] = field(default_factory=dict, init=False)
+    cumulative_cost: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
-        self.equity = float(self.initial_capital)
+        if not isfinite(self.initial_capital) or self.initial_capital <= 0:
+            raise ValueError("initial_capital must be finite and positive")
+        self.cash = float(self.initial_capital)
 
-    def apply_market_return(self, asset_returns: pd.Series) -> float:
-        """Apply one day of asset returns to the currently held weights.
+    @property
+    def equity(self) -> float:
+        """Cash plus signed positions valued at their most recent valid marks."""
+        return self.cash + sum(q * self.marks[s] for s, q in self.quantities.items())
 
-        Returns the portfolio's daily return fraction (cash earns 0%).
-        """
-        if self.weights.empty:
-            return 0.0
-        w = self.weights
-        r = asset_returns.reindex(w.index).fillna(0.0)
-        day_ret = float((w * r).sum())
-        self.equity *= 1.0 + day_ret
-        return day_ret
+    @property
+    def weights(self) -> pd.Series:
+        """Actual marked exposures, including natural drift between fills."""
+        eq = self.equity
+        if eq <= 0 or not isfinite(eq):
+            raise ValueError("Cannot calculate portfolio weights with non-positive/non-finite equity")
+        return pd.Series({s: q * self.marks[s] / eq for s, q in self.quantities.items()},
+                         dtype=float)
 
-    def charge_cost(self, cost_fraction: float) -> None:
-        """Deduct transaction cost expressed as a fraction of equity."""
-        cost_fraction = max(0.0, float(cost_fraction))
-        self.cumulative_cost += cost_fraction * self.equity
-        self.equity *= 1.0 - cost_fraction
+    def mark(self, prices: dict[str, float], date: pd.Timestamp) -> dict[str, float]:
+        """Mark all held units atomically; return per-symbol dollar market P&L."""
+        validated = {s: required_mark(prices.get(s), s, date) for s in self.quantities}
+        pnl = {s: q * (validated[s] - self.marks[s]) for s, q in self.quantities.items()}
+        self.marks.update(validated)
+        return pnl
 
-    def set_weights(self, new_weights: pd.Series) -> None:
-        self.weights = new_weights.astype(float).copy()
+    def apply_fill(self, order: Order) -> None:
+        """Book one successful fill's signed notional and fee; ignore rejections."""
+        if order.status != OrderStatus.FILLED:
+            return
+        price = required_mark(order.fill_price, order.symbol, order.execution_date)
+        q = order.executed_quantity
+        before = self.quantities.get(order.symbol, 0.0)
+        if (not isfinite(q) or not isfinite(order.cost) or order.cost < 0
+                or not isclose(order.notional, abs(q * price), rel_tol=1e-12, abs_tol=1e-10)
+                or not isclose(before, order.quantity_before, rel_tol=1e-12, abs_tol=1e-12)):
+            raise ValueError(f"Invalid/stale fill for {order.symbol} on {order.execution_date}")
+        self.cash -= q * price + order.cost
+        self.cumulative_cost += order.cost
+        after = before + q
+        if after == 0:
+            self.quantities.pop(order.symbol, None)
+        else:
+            self.quantities[order.symbol] = after
+        self.marks[order.symbol] = price
+
+    def charge_cost(self, amount: float) -> None:
+        """Deduct a dollar borrowing charge without resizing any position."""
+        if not isfinite(amount) or amount < 0:
+            raise ValueError("Cost must be finite and non-negative")
+        self.cash -= amount
+        self.cumulative_cost += amount
+
+    def snapshot(self, date: pd.Timestamp, event: str, *, symbol: str | None = None,
+                 quantity: float = 0.0, cost: float = 0.0) -> dict:
+        """Copy the reconciled state after an event for independent replay."""
+        return {"date": date, "event": event, "symbol": symbol, "quantity": quantity,
+                "cost": cost, "cash": self.cash, "quantities": self.quantities.copy(),
+                "marks": self.marks.copy(), "equity": self.equity,
+                "cumulative_cost": self.cumulative_cost}

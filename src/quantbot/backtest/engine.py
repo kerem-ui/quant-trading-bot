@@ -1,4 +1,4 @@
-"""BacktestEngine v1 - weight-based, no look-ahead.
+"""ETF cash-and-quantity backtester with target-weight strategy inputs.
 
 Timeline guarantee
 ------------------
@@ -33,7 +33,7 @@ from ..utils.logging import get_logger
 from ..utils.math import TRADING_DAYS_PER_YEAR
 from .broker import SimulatedBroker
 from .order import Order, OrderStatus
-from .position import Portfolio
+from .position import Portfolio, required_mark
 
 log = get_logger("backtest.engine")
 
@@ -52,12 +52,27 @@ class BacktestResult:
     # total_cost == trading_cost + borrow_cost (kept for back-compat).
     trading_cost: float = 0.0
     borrow_cost: float = 0.0
+    cash: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    quantities: pd.DataFrame = field(default_factory=pd.DataFrame)
+    marks: pd.DataFrame = field(default_factory=pd.DataFrame)
+    gross_pnl: pd.DataFrame = field(default_factory=pd.DataFrame)
+    trading_costs: pd.DataFrame = field(default_factory=pd.DataFrame)
+    borrow_costs: pd.DataFrame = field(default_factory=pd.DataFrame)
+    ledger: list[dict] = field(default_factory=list)
+
+    @property
+    def turnover_by_symbol(self) -> pd.DataFrame:
+        """Executed absolute notional / pre-cost batch equity; price drift is not trading."""
+        out = pd.DataFrame(0.0, index=self.weights.index, columns=self.weights.columns)
+        for order in self.orders:
+            if order.status == OrderStatus.FILLED:
+                out.at[order.execution_date, order.symbol] += order.notional / order.allocation_equity
+        return out
 
     @property
     def turnover_series(self) -> pd.Series:
-        """Per-rebalance one-way turnover (sum |Δw|)."""
-        w = self.weights.fillna(0.0)
-        return w.diff().abs().sum(axis=1)
+        """Daily one-way turnover from actual executed fills."""
+        return self.turnover_by_symbol.sum(axis=1)
 
     @property
     def annual_turnover(self) -> float:
@@ -65,23 +80,18 @@ class BacktestResult:
         return float(self.turnover_series.sum() / years)
 
     def turnover_attribution(self) -> dict:
-        """Decompose one-way turnover into entries / exits / resizing.
-
-        entry  : a name moving from flat into a position (|prev|~0 -> |new|>0)
-        exit   : a name moving from a position to flat
-        resize : change between two non-flat states (incl. pair rotation / sign
-                 flips for the dollar-neutral book)
-        Values are summed |Δw| and also annualised.
-        """
-        w = self.weights.fillna(0.0)
-        prev = w.shift().fillna(0.0)  # day 0 prev = flat (avoids NaN poisoning)
-        eps = 1e-9
-        d = (w - prev).abs()
-        was_flat = prev.abs() <= eps
-        now_flat = w.abs() <= eps
-        entry = d.where(was_flat & ~now_flat, 0.0).to_numpy().sum()
-        exit_ = d.where(~was_flat & now_flat, 0.0).to_numpy().sum()
-        resize = d.where(~was_flat & ~now_flat, 0.0).to_numpy().sum()
+        """Attribute executed turnover to entries, exits and resizing (including flips)."""
+        entry = exit_ = resize = 0.0
+        for order in self.orders:
+            if order.status != OrderStatus.FILLED:
+                continue
+            turnover = order.notional / order.allocation_equity
+            if order.quantity_before == 0:
+                entry += turnover
+            elif order.quantity_before + order.executed_quantity == 0:
+                exit_ += turnover
+            else:
+                resize += turnover
         years = max(len(self.equity_curve) / TRADING_DAYS_PER_YEAR, 1e-9)
         tot = entry + exit_ + resize
         return {
@@ -101,11 +111,11 @@ class BacktestResult:
         """Trading vs borrow split, and trading cost by side (buy/sell)."""
         buy = sum(
             o.cost for o in self.orders
-            if o.status.name == "FILLED" and o.delta_weight >= 0
+            if o.status == OrderStatus.FILLED and o.executed_quantity >= 0
         )
         sell = sum(
             o.cost for o in self.orders
-            if o.status.name == "FILLED" and o.delta_weight < 0
+            if o.status == OrderStatus.FILLED and o.executed_quantity < 0
         )
         return {
             "trading_cost": float(self.trading_cost),
@@ -178,6 +188,7 @@ class BacktestEngine:
         *,
         sector_map: dict[str, str] | None = None,
     ) -> BacktestResult:
+        """Run adjusted-unit accounting; see docs/phase1a_etf_accounting.md."""
         # --- Build aligned price / return frames -------------------------- #
         close = pd.DataFrame(
             {s: df["adjusted_close"] for s, df in panel.items()}
@@ -185,7 +196,7 @@ class BacktestEngine:
         dates = close.index
         if len(dates) < 60:
             raise ValueError("Not enough data to backtest (need >= 60 bars).")
-        asset_returns = close.pct_change()  # pandas 3.0: no implicit ffill
+        asset_returns = close.pct_change(fill_method=None)
         trailing_vol = self._trailing_vol(asset_returns)
 
         # --- Strategy precomputes a CAUSAL raw weight panel --------------- #
@@ -209,51 +220,93 @@ class BacktestEngine:
         orders: list[Order] = []
         risk_events: list[dict] = []
         strat_equity_hist: list[float] = []
+        cash_hist: list[float] = []
+        quantity_rows: list[dict] = []
+        mark_rows: list[dict] = []
+        pnl_rows: list[dict] = []
+        trading_rows: list[dict] = []
+        borrow_rows: list[dict] = []
+        ledger: list[dict] = []
 
         pending: dict | None = None
-        prev_day_ret = 0.0
         borrow_paid = 0.0  # V2.1: cumulative $ borrow cost (for attribution)
         trading_paid = 0.0  # V2.1: cumulative $ trading cost
 
         for i, date in enumerate(dates):
-            # 1. Mark-to-market held weights with today's asset returns.
-            day_ret = portfolio.apply_market_return(asset_returns.loc[date]) if i > 0 else 0.0
+            starting_equity = portfolio.equity
+            carried_quantities = portfolio.quantities.copy()
+            pnl: dict[str, float] = {}
+            trading: dict[str, float] = {}
+            borrowing: dict[str, float] = {}
 
-            # 1b. Daily borrow cost on short exposure (S03 short leg, etc.).
-            if self.borrow_cost_bps_annual and not portfolio.weights.empty:
-                short_gross = float(portfolio.weights.clip(upper=0.0).abs().sum())
-                if short_gross > 0:
-                    daily_borrow = (
-                        short_gross * self.borrow_cost_bps_annual / 1e4
-                    ) / TRADING_DAYS_PER_YEAR
-                    borrow_paid += daily_borrow * portfolio.equity
-                    portfolio.charge_cost(daily_borrow)
-
-            # 2. Execute orders that were signalled on the previous rebalance.
+            # Mark carried holdings at execution time, before converting any targets.
             if pending is not None and pending["exec_date"] == date:
+                execution_marks = {s: broker.execution_price(s, date)
+                                   for s in portfolio.quantities}
+                pnl.update(portfolio.mark(execution_marks, date))
+                ledger.append(portfolio.snapshot(date, "execution_mark"))
                 eq_before = portfolio.equity
-                filled_cost = 0.0
                 for od in pending["orders"]:
-                    broker.fill(od, eq_before)
+                    current_quantity = portfolio.quantities.get(od.symbol, 0.0)
+                    price = broker.execution_price(od.symbol, date)
+                    if price is not None and eq_before > 0:
+                        current_weight = current_quantity * price / eq_before
+                        delta = od.target_weight - current_weight
+                        # The no-trade band retains quantities, never target weights.
+                        if (od.target_weight != 0 and (
+                            abs(delta) < 1e-12 or (
+                                self.rebalance_band > 0 and abs(delta) < self.rebalance_band
+                            )
+                        )):
+                            continue
+                    broker.fill(od, eq_before, current_quantity=current_quantity)
                     if od.status == OrderStatus.FILLED:
-                        filled_cost += od.cost
+                        portfolio.apply_fill(od)
+                        trading[od.symbol] = trading.get(od.symbol, 0.0) + od.cost
+                    ledger.append(portfolio.snapshot(
+                        date, "fill" if od.status == OrderStatus.FILLED else "rejected",
+                        symbol=od.symbol, quantity=od.executed_quantity, cost=od.cost))
                     orders.append(od)
-                trading_paid += filled_cost
-                if eq_before > 0:
-                    portfolio.charge_cost(filled_cost / eq_before)
-                portfolio.set_weights(pending["weights"])
                 pending = None
 
+            # Only the post-fill quantities earn the remaining move to the close.
+            closing_marks = close.loc[date].to_dict()
+            for symbol, amount in portfolio.mark(closing_marks, date).items():
+                pnl[symbol] = pnl.get(symbol, 0.0) + amount
+            ledger.append(portfolio.snapshot(date, "close_mark"))
+
+            # Retain the existing carried-short, annual-bps/252 convention.
+            # Value actual carried quantities at today's adjusted close, including
+            # exit days; no entry-day/intraday borrow accrual or cash financing.
+            if self.borrow_cost_bps_annual:
+                for symbol, quantity in carried_quantities.items():
+                    if quantity < 0:
+                        price = required_mark(closing_marks.get(symbol), symbol, date)
+                        amount = -quantity * price * self.borrow_cost_bps_annual / 1e4 / TRADING_DAYS_PER_YEAR
+                        portfolio.charge_cost(amount)
+                        borrowing[symbol] = amount
+                        ledger.append(portfolio.snapshot(date, "borrow", symbol=symbol, cost=amount))
+
+            if not np.isfinite(portfolio.equity) or portfolio.equity <= 0:
+                raise ValueError(f"Non-positive/non-finite portfolio equity on {date.date()}")
+            day_ret = portfolio.equity / starting_equity - 1.0
+            trading_paid += sum(trading.values())
+            borrow_paid += sum(borrowing.values())
             equity_hist.append(portfolio.equity)
             ret_hist.append(day_ret)
             weight_rows[date] = portfolio.weights.reindex(close.columns).fillna(0.0)
             strat_equity_hist.append(portfolio.equity)
+            cash_hist.append(portfolio.cash)
+            quantity_rows.append(portfolio.quantities.copy())
+            mark_rows.append({s: portfolio.marks[s] for s in portfolio.quantities})
+            pnl_rows.append(pnl)
+            trading_rows.append(trading)
+            borrow_rows.append(borrowing)
 
             # 3. On a rebalance date, generate the next target (executes t+1).
             if date in rb_set and i < len(dates) - 1:
                 tw_raw = raw_weights.loc[date]
                 if tw_raw.isna().all():
-                    prev_day_ret = day_ret
                     continue
                 tw_raw = tw_raw.fillna(0.0)
 
@@ -264,11 +317,13 @@ class BacktestEngine:
                         tw_raw,
                         portfolio_equity=eq_series,
                         strategy_equity=strat_eq,
-                        prev_day_return=prev_day_ret,
+                        prev_day_return=day_ret,
                         asset_vols=trailing_vol.loc[date],
                         sector_map=sector_map,
                         market_neutral=market_neutral,
                         allow_leverage_up=allow_leverage_up,
+                        strategy_max_weight=getattr(strategy, "max_weight", None),
+                        long_only=bool(getattr(strategy, "long_only", False)),
                     )
                     if rstate.notes:
                         risk_events.append({"date": date, "notes": list(rstate.notes)})
@@ -279,26 +334,15 @@ class BacktestEngine:
                 prev_w = portfolio.weights
                 new_orders: list[Order] = []
                 all_syms = sorted(set(prev_w.index) | set(tw_adj.index))
-                # Build the EFFECTIVE target: names whose change is inside the
-                # no-trade band keep their previous weight (no order, no cost),
-                # so weights / turnover / cost stay mutually consistent. A move
-                # to flat (tw == 0) is always executed so positions can close.
-                effective_w = pd.Series(0.0, index=close.columns)
+                # Submit targets, including unchanged nonzero targets: overnight
+                # drift may require a real trade to reach them at execution time.
                 for sym in all_syms:
                     pw = float(prev_w.get(sym, 0.0))
                     tw = float(tw_adj.get(sym, 0.0))
-                    delta = tw - pw
-                    skip_small = (
-                        self.rebalance_band > 0.0
-                        and abs(delta) < self.rebalance_band
-                        and tw != 0.0
-                    )
-                    if abs(delta) < 1e-9 or skip_small:
-                        if sym in effective_w.index:
-                            effective_w[sym] = pw  # hold prior weight
+                    if not np.isfinite(tw):
+                        raise ValueError(f"Non-finite target for {sym} on {date.date()}")
+                    if pw == 0 and tw == 0:
                         continue
-                    if sym in effective_w.index:
-                        effective_w[sym] = tw
                     new_orders.append(
                         Order(
                             symbol=sym,
@@ -311,11 +355,8 @@ class BacktestEngine:
                 if new_orders:
                     pending = {
                         "exec_date": exec_date,
-                        "weights": effective_w.reindex(close.columns).fillna(0.0),
                         "orders": new_orders,
                     }
-
-            prev_day_ret = day_ret
 
         equity_curve = pd.Series(equity_hist, index=dates, name="equity")
         returns = pd.Series(ret_hist, index=dates, name="returns")
@@ -338,9 +379,18 @@ class BacktestEngine:
             initial_capital=self.initial_capital,
             trading_cost=trading_paid,
             borrow_cost=borrow_paid,
+            cash=pd.Series(cash_hist, index=dates, name="cash"),
+            quantities=pd.DataFrame(quantity_rows, index=dates).reindex(columns=close.columns).fillna(0.0),
+            marks=pd.DataFrame(mark_rows, index=dates).reindex(columns=close.columns),
+            gross_pnl=pd.DataFrame(pnl_rows, index=dates).reindex(columns=close.columns).fillna(0.0),
+            trading_costs=pd.DataFrame(trading_rows, index=dates).reindex(columns=close.columns).fillna(0.0),
+            borrow_costs=pd.DataFrame(borrow_rows, index=dates).reindex(columns=close.columns).fillna(0.0),
+            ledger=ledger,
             config={
                 "execution": self.execution,
                 "rebalance": freq,
                 "borrow_cost_bps_annual": self.borrow_cost_bps_annual,
+                "price_basis": "adjusted research units (not raw shares)",
+                "borrow_convention": "carried short units at current adjusted close, annual bps / 252",
             },
         )

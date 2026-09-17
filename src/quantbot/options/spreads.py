@@ -41,6 +41,12 @@ class Candidate:
     reject_reason: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # Own the dictionaries: adding canonical identity must not mutate a
+        # caller's legs or let fill-day code silently replace one identity.
+        self.legs = [dict(underlying=self.underlying, expiration=self.expiration,
+                          multiplier=100) | leg for leg in self.legs]
+
 
 def _reject(name: str, reason: str, **meta: Any) -> Candidate:
     """Helper to emit a rejected candidate (engine logs the reason)."""
@@ -69,6 +75,7 @@ def build_bull_call_spread(
     if chain_today.empty:
         return _reject("bull_call_spread", "empty_chain")
 
+    chain_today = chain_today[chain_today["underlying"] == underlying]
     exp = cs.select_expiration(chain_today, dte_min, dte_max)
     if exp is None:
         return _reject("bull_call_spread", "no_expiration")
@@ -162,6 +169,7 @@ def build_bear_put_spread(
     if chain_today.empty:
         return _reject("bear_put_spread", "empty_chain")
 
+    chain_today = chain_today[chain_today["underlying"] == underlying]
     exp = cs.select_expiration(chain_today, dte_min, dte_max)
     if exp is None:
         return _reject("bear_put_spread", "no_expiration")
@@ -261,6 +269,7 @@ def build_bull_put_spread(
     if chain_today.empty:
         return _reject("bull_put_spread", "empty_chain")
 
+    chain_today = chain_today[chain_today["underlying"] == underlying]
     exp = cs.select_expiration(chain_today, dte_min, dte_max)
     if exp is None:
         return _reject("bull_put_spread", "no_expiration")

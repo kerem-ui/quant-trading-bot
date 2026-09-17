@@ -14,6 +14,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .fill_model import fill_leg
+
 
 # --------------------------------------------------------------------------- #
 # Expiration selection
@@ -44,14 +46,7 @@ def select_expiration(
 # Strike selection
 # --------------------------------------------------------------------------- #
 def _liquidity_ok(row: pd.Series, spread_max_pct: float) -> bool:
-    bid = float(row.get("bid", 0.0) or 0.0)
-    ask = float(row.get("ask", 0.0) or 0.0)
-    if bid <= 0 or ask <= 0:
-        return False
-    mid = (bid + ask) / 2.0
-    if mid <= 0:
-        return False
-    return abs(ask - bid) / mid <= spread_max_pct
+    return fill_leg(row, 1, spread_max_pct=spread_max_pct).accepted
 
 
 def select_by_delta(
@@ -112,17 +107,23 @@ def select_by_moneyness(
 
 def lookup_row(
     chain_today: pd.DataFrame, *, expiration: pd.Timestamp,
-    option_type: str, strike: float,
+    option_type: str, strike: float, underlying: str | None = None,
 ) -> pd.Series | None:
-    """Find an exact (expiration, option_type, strike) row on a given day.
+    """Find an exact underlying/expiration/right/strike row on a given day.
 
-    Used for daily MTM and for closing/expiration settlement.
+    Omitting underlying is supported only for an unambiguous single-row match
+    (legacy callers). Engine callers always supply it. Duplicates fail closed.
     """
     sub = chain_today[
         (chain_today["expiration"] == pd.Timestamp(expiration))
         & (chain_today["option_type"].str.lower() == option_type.lower())
-        & (np.isclose(chain_today["strike"].astype(float), float(strike)))
+        & (chain_today["strike"].astype(float) == float(strike))
     ]
+    if underlying is not None:
+        sub = sub[sub["underlying"] == underlying]
     if sub.empty:
         return None
+    if len(sub) != 1:
+        raise ValueError(f"ambiguous option contract {underlying} {expiration} "
+                         f"{option_type} {strike}")
     return sub.iloc[0]

@@ -8,7 +8,8 @@ What this script does
 ---------------------
 1. Re-runs the three V5.3 defined-risk verticals (bull_call, bear_put,
    bull_put) at default cost + default spread filter -- this is the
-   BASELINE and must match the V5.3 archive numbers.
+   comparison baseline. Phase 1B corrected accounting supersedes archived
+   V5.3 numbers; the old spread-fee double count is no longer reproduced.
 2. Sweeps the ``OptionsCostModel`` parameters across realistic ranges
    to test whether any strategy result flips sign purely due to cost
    assumptions.
@@ -127,7 +128,7 @@ def run_one(
     return RunOut(
         strategy=strategy_name, scenario=scenario, result=res,
         cost_model_repr=(f"per_contract_fee={cost.per_contract_fee:.2f},"
-                          f"bid_ask_fraction={cost.bid_ask_fraction:.2f},"
+                          "spread_crossing=in_fill_price,"
                           f"multi_leg_penalty={cost.multi_leg_penalty:.2f}"),
         limits_repr=f"spread_max_pct={limits.spread_max_pct:.2f}",
     )
@@ -171,14 +172,12 @@ def headline_row(run: RunOut) -> dict:
 # --------------------------------------------------------------------------- #
 COST_SCENARIOS: dict[str, dict] = {
     # name: kwargs for OptionsCostModel
-    "low_cost":       dict(per_contract_fee=0.30, bid_ask_fraction=0.25,
+    "low_cost":       dict(per_contract_fee=0.30,
                             multi_leg_penalty=0.50),
-    "default":        dict(per_contract_fee=0.65, bid_ask_fraction=0.50,
+    "default":        dict(per_contract_fee=0.65,
                             multi_leg_penalty=1.00),
-    "high_cost":      dict(per_contract_fee=1.50, bid_ask_fraction=0.75,
+    "high_cost":      dict(per_contract_fee=1.50,
                             multi_leg_penalty=2.00),
-    "wide_bid_ask":   dict(per_contract_fee=0.65, bid_ask_fraction=1.00,
-                            multi_leg_penalty=1.00),
 }
 
 # spread_max_pct must be overridden on BOTH the strategy AND the engine
@@ -216,13 +215,8 @@ def diagnostics_row(run: RunOut) -> dict | None:
     trades_df = trades_df.copy()
     trades_df["legs"] = [t.legs for t in r.trades]
     trades_df["entry_spread_pct"] = [
-        # Average per-leg spread pct at fill, derivable from fill_results
-        # the engine recorded as net_entry_cash + open_cost; we don't have
-        # individual bid/ask back at this layer, so we proxy via:
-        #   abs(open_cost - (multi_leg_penalty + per_contract_fee*2)) /
-        #   max(abs(net_entry_cash),1)
-        # which is a weak proxy. Better is to recompute from raw orders;
-        # skip if it complicates.
+        # Spread cannot be inferred from commissions/extra slippage. Keep this
+        # unavailable diagnostic explicit instead of treating fees as spread.
         float("nan") for _ in r.trades
     ]
     trades_df["dte_open"] = trades_df.apply(lambda r_: _dte_at(r_, "open"), axis=1)
@@ -359,10 +353,11 @@ def write_summary_md(
     lines.append(
         "Same strategies, default `spread_max_pct=0.25`, varying "
         "`OptionsCostModel` parameters. "
-        "Scenarios: `low_cost` (fee 0.30 / bid_ask 0.25 / penalty 0.50), "
-        "`default` (fee 0.65 / bid_ask 0.50 / penalty 1.00), "
-        "`high_cost` (fee 1.50 / bid_ask 0.75 / penalty 2.00), "
-        "`wide_bid_ask` (fee 0.65 / bid_ask 1.00 / penalty 1.00). "
+        "Scenarios: `low_cost` (fee 0.30 / penalty 0.50), "
+        "`default` (fee 0.65 / penalty 1.00), "
+        "`high_cost` (fee 1.50 / penalty 2.00). "
+        "Actual bid/ask crossing is already in the fills; these scenarios "
+        "vary commissions and explicit additional slippage only. "
         "**No setting is being recommended as default.**\n"
     )
     cs = cost[["strategy", "scenario", "trades", "total_return_pct",

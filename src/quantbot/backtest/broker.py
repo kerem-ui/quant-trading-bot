@@ -11,6 +11,8 @@ traded notional.
 
 from __future__ import annotations
 
+from math import isfinite
+
 import pandas as pd
 
 from .. import LIVE_TRADING_ENABLED
@@ -38,25 +40,49 @@ class SimulatedBroker:
         self._price_col = "open" if execution == "next_open" else "close"
 
     def execution_price(self, symbol: str, execution_date: pd.Timestamp) -> float | None:
+        """Adjusted open = raw open * adjusted close / raw close; close = adjusted close.
+
+        The factor is a research unit conversion, not an executable raw-share quote.
+        """
         df = self.panel.get(symbol)
         if df is None or execution_date not in df.index:
             return None
-        px = df.at[execution_date, self._price_col]
-        return float(px) if pd.notna(px) else None
+        raw_close = df.at[execution_date, "close"]
+        adjusted_close = df.at[execution_date, "adjusted_close"]
+        raw_price = df.at[execution_date, self._price_col]
+        if any(pd.isna(p) or not isfinite(p) or p <= 0
+               for p in (raw_close, adjusted_close, raw_price)):
+            return None
+        price = float(adjusted_close if self.execution == "next_close"
+                      else raw_price * (adjusted_close / raw_close))
+        return price if isfinite(price) and price > 0 else None
 
-    def fill(self, order: Order, equity: float) -> Order:
-        """Fill one order at the next-bar price and compute its cost.
+    def fill(self, order: Order, equity: float, current_quantity: float = 0.0) -> Order:
+        """Convert a target into a signed fill using execution-time state.
 
-        Cost is charged on the *notional traded* = |Δweight| * equity, using
-        the round-trip-aware one-way cost model (each rebalance is one way).
+        Every order in a rebalance uses the same pre-cost marked equity, so
+        symbol ordering does not change allocations. Costs are cash charges.
         """
+        if order.status != OrderStatus.PENDING:
+            raise ValueError("Only a pending order can be filled")
         price = self.execution_price(order.symbol, order.execution_date)
-        if price is None or price <= 0:
+        if price is None:
             order.status = OrderStatus.REJECTED
             order.note = "no execution price (missing bar / halted)"
             return order
-        traded_notional = abs(order.delta_weight) * equity
-        order.cost = self.cost_model.cost(traded_notional)
+        if (not isfinite(equity) or equity <= 0 or not isfinite(current_quantity)
+                or not isfinite(order.target_weight)):
+            raise ValueError("Fill sizing requires finite targets/quantities and positive equity")
+        quantity = order.target_weight * equity / price - current_quantity
+        notional = abs(quantity * price)
+        cost = self.cost_model.cost(notional)
+        if not isfinite(quantity) or not isfinite(notional) or not isfinite(cost) or cost < 0:
+            raise ValueError("Non-finite fill or invalid transaction cost")
+        order.executed_quantity = quantity
+        order.quantity_before = current_quantity
+        order.allocation_equity = equity
+        order.notional = notional
+        order.cost = cost
         order.fill_price = price
         order.status = OrderStatus.FILLED
         return order

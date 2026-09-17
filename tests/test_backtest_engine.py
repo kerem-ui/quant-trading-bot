@@ -32,7 +32,7 @@ def test_every_order_executes_after_signal(small_panel):
 
 
 def test_execution_price_is_next_bar(small_panel):
-    """Fill price must equal the NEXT bar's open (execution=next_open),
+    """Fill price must equal the NEXT bar's adjusted open (execution=next_open),
     never the signal-bar price."""
     eng = BacktestEngine(
         cost_model=EquityCostModel(),
@@ -43,7 +43,8 @@ def test_execution_price_is_next_bar(small_panel):
     filled = [o for o in res.orders if o.status == OrderStatus.FILLED]
     assert filled
     o = filled[0]
-    expected = small_panel[o.symbol].at[o.execution_date, "open"]
+    bar = small_panel[o.symbol].loc[o.execution_date]
+    expected = bar["open"] * bar["adjusted_close"] / bar["close"]
     assert o.fill_price == pytest.approx(float(expected))
     assert o.execution_date > o.signal_date
 

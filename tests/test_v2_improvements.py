@@ -75,12 +75,12 @@ def test_no_trade_band_blocks_small_changes_but_allows_full_exit(small_panel):
     res = BacktestEngine(risk_manager=rm, rebalance_band=0.05).run(
         S01TrendFollowing({"min_holding_days": 5}), small_panel
     )
-    deltas = res.weights.diff().abs()
-    nonzero = deltas.values[deltas.values > 1e-9]
-    # Every executed change is either >= band OR a move to flat (0).
-    flat_moves = ((res.weights.shift() != 0) & (res.weights == 0)).values.sum()
-    assert nonzero.size > 0
-    assert (nonzero[nonzero < 0.05].size == 0) or flat_moves > 0
+    # Weight drift is not a trade. Check EVERY executed change against its
+    # execution-time marked equity, with the explicit full-exit exception.
+    filled = [o for o in res.orders if o.status.name == "FILLED"]
+    assert filled
+    for order in filled:
+        assert order.notional / order.allocation_equity >= 0.05 - 1e-12 or order.target_weight == 0
 
 
 def test_band_reduces_turnover(small_panel):
