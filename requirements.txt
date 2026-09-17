@@ -1,12 +1,4 @@
-# Core research / backtesting dependencies
-numpy>=1.26
-pandas>=2.1
-scipy>=1.11
-statsmodels>=0.14
-matplotlib>=3.8
-
-# Free daily OHLCV data (optional at runtime; synthetic fallback exists)
-yfinance>=0.2.40
-
-# Testing
-pytest>=7.4
+# Compatibility entry point only. pyproject.toml is the sole dependency source.
+# For reproducible development and test installs, use uv.lock as documented in
+# docs/phase2a_environment.md. This installs only the core project dependencies.
+-e .

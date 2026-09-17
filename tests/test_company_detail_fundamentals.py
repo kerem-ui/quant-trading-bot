@@ -140,6 +140,47 @@ def _facts_payload(
     return {"facts": {"us-gaap": gaap, "dei": dei}}
 
 
+@pytest.fixture
+def clean_checkout_sec_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """Small SEC-format cache for clean-clone integration tests."""
+    sec_dir = tmp_path / "sec"
+    facts_dir = sec_dir / "companyfacts"
+    facts_dir.mkdir(parents=True)
+    ticker_map = sec_dir / "company_tickers.json"
+    ticker_map.write_text(json.dumps(_ticker_map_payload(
+        ("NVDA", 1045810), ("AMD", 2488), ("MSFT", 789019),
+        ("ASML", 937966),
+    )), encoding="utf-8")
+    payload = _facts_payload(
+        revenue_fy=[
+            (2024, "2024-01-28", 60_000_000_000),
+            (2025, "2025-01-26", 100_000_000_000),
+        ],
+        gross_profit_fy=[
+            (2024, "2024-01-28", 39_000_000_000),
+            (2025, "2025-01-26", 70_000_000_000),
+        ],
+        operating_income_fy=[(2025, "2025-01-26", 50_000_000_000)],
+        net_income_fy=[(2025, "2025-01-26", 40_000_000_000)],
+        ocf_fy=[(2025, "2025-01-26", 45_000_000_000)],
+        capex_fy=[(2025, "2025-01-26", 4_000_000_000)],
+        inventory_fy=[
+            (2024, "2024-01-28", 5_000_000_000),
+            (2025, "2025-01-26", 6_000_000_000),
+        ],
+        cash_fy=[(2025, "2025-01-26", 20_000_000_000)],
+        debt_fy=[(2025, "2025-01-26", 10_000_000_000)],
+        shares_outstanding_gaap=[
+            (2025, "2025-01-26", 2_000_000_000),
+        ],
+    )
+    for cik in ("CIK0001045810", "CIK0000002488", "CIK0000789019"):
+        (facts_dir / f"{cik}.json").write_text(
+            json.dumps(payload), encoding="utf-8",
+        )
+    return ticker_map, facts_dir
+
+
 # --------------------------------------------------------------------------- #
 # Guardrails (V7.5.2 surface only)
 # --------------------------------------------------------------------------- #
@@ -488,18 +529,24 @@ class TestComputeFundamentalsSnapshot:
 
 
 # --------------------------------------------------------------------------- #
-# Real-data smoke (uses the committed NVDA / AMD / MSFT caches)
+# Clean-checkout SEC-format integration smoke
 # --------------------------------------------------------------------------- #
 class TestRealDataSmoke:
     @pytest.mark.parametrize("ticker", ["NVDA", "AMD", "MSFT"])
-    def test_universe_ticker_resolves(self, ticker):
-        cik, p = companyfacts_path_for_ticker(ticker)
+    def test_universe_ticker_resolves(self, ticker, clean_checkout_sec_fixture):
+        ticker_map, facts_dir = clean_checkout_sec_fixture
+        cik, p = companyfacts_path_for_ticker(
+            ticker, ticker_map_path=ticker_map, companyfacts_dir=facts_dir,
+        )
         assert cik != ""
         assert p is not None and p.is_file()
 
-    def test_nvda_real_numbers_reasonable(self):
-        cik, p = companyfacts_path_for_ticker("NVDA")
-        facts = load_companyfacts_json(cik) if cik else None
+    def test_nvda_real_numbers_reasonable(self, clean_checkout_sec_fixture):
+        ticker_map, facts_dir = clean_checkout_sec_fixture
+        cik, p = companyfacts_path_for_ticker(
+            "NVDA", ticker_map_path=ticker_map, companyfacts_dir=facts_dir,
+        )
+        facts = load_companyfacts_json(cik, companyfacts_dir=facts_dir) if cik else None
         snap = compute_fundamentals_snapshot(facts, ticker="NVDA",
                                                cik=cik)
         # NVDA's V6.7 ledger asserts revenue YoY ≈ +65%. The exact value
@@ -513,13 +560,17 @@ class TestRealDataSmoke:
         assert gm_pct > 50.0
         assert snap.shares_outstanding != "n/a"
 
-    def test_foreign_filer_graceful(self):
+    def test_foreign_filer_graceful(self, clean_checkout_sec_fixture):
+        ticker_map, facts_dir = clean_checkout_sec_fixture
         # ASML is in SEC's ticker directory but has no cached companyfacts.
-        cik, p = companyfacts_path_for_ticker("ASML")
+        cik, p = companyfacts_path_for_ticker(
+            "ASML", ticker_map_path=ticker_map, companyfacts_dir=facts_dir,
+        )
         # CIK is resolvable; the JSON file is absent.
         assert cik != ""
         assert p is None or not p.is_file()
-        facts = load_companyfacts_json(cik) if (cik and p) else None
+        facts = (load_companyfacts_json(cik, companyfacts_dir=facts_dir)
+                 if (cik and p) else None)
         snap = compute_fundamentals_snapshot(facts, ticker="ASML")
         # When facts is None (because we didn't load), the snapshot is
         # an empty state with the spec-mandated phrase.
@@ -538,8 +589,13 @@ class TestPlatformIntegration:
         # snapshot is the empty state.
         assert snap.data_gap_note != ""
 
-    def test_real_nvda_via_platform(self, platform):
-        snap = platform.load_fundamentals_snapshot_from_disk("NVDA")
+    def test_real_nvda_via_platform(self, platform,
+                                    clean_checkout_sec_fixture, tmp_path):
+        ticker_map, facts_dir = clean_checkout_sec_fixture
+        snap = platform.load_fundamentals_snapshot_from_disk(
+            "NVDA", ticker_map_path=ticker_map,
+            companyfacts_dir=facts_dir, price_cache_dir=tmp_path,
+        )
         assert snap.revenue != "n/a"
         assert snap.cik.startswith("CIK")
         # No NVDA price cache today → valuation is empty.

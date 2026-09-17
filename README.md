@@ -1094,11 +1094,16 @@ Markdown/CSV tearsheets, and a pytest suite (**137 tests**).
 
 ## 3. Setup
 
-```bash
-python -m pip install -r requirements.txt      # numpy, pandas, scipy, statsmodels, matplotlib, yfinance, pytest
-# or:  python -m pip install -e .
+```powershell
+python -m pip install uv==0.11.8
+$env:UV_PROJECT_ENVIRONMENT = 'C:\QuantEnvs\quant_trading_bot_phase2'
+uv sync --locked --all-extras --group dev --python 3.12.10
 ```
-Python 3.11+ required (developed on 3.12 / pandas 3.0).
+Python 3.12 is required; the verified interpreter is CPython 3.12.10. The
+committed `uv.lock` is the reproducible dependency source. See
+[`docs/phase2a_environment.md`](docs/phase2a_environment.md) for clean Windows
+setup and verification commands. `requirements.txt` is retained only as a
+core-install compatibility pointer and is not the locked development workflow.
 
 Optional config overrides (committed examples are used if these are absent):
 ```
@@ -1135,9 +1140,9 @@ The V7 Streamlit platform exposes the V6 sector / company / aggregation
 research, the V7.1 portfolio, V7.7 protection labels, V7.4 PortTech labels,
 and the V7.8 MarketPulse shell as a single local web app.
 
-```bash
-python -m streamlit run apps/portfolio_platform.py        # V7 platform
-python -m streamlit run apps/sector_thesis_dashboard.py   # V6 dashboard
+```powershell
+& 'C:\QuantEnvs\quant_trading_bot_phase2\Scripts\python.exe' -m streamlit run apps/portfolio_platform.py
+& 'C:\QuantEnvs\quant_trading_bot_phase2\Scripts\python.exe' -m streamlit run apps/sector_thesis_dashboard.py
 ```
 
 Both apps bind to `localhost` by default. For phone / tablet access on
@@ -1153,8 +1158,8 @@ a broker, does not fetch live market data, and has no authentication.
 
 ## 5. Run the tests
 
-```bash
-python -m pytest          # 55 tests, ~9s
+```powershell
+& 'C:\QuantEnvs\quant_trading_bot_phase2\Scripts\python.exe' -m pytest
 ```
 The suite covers the spec's required checks: data validation catches impossible
 OHLC; indicators/strategies are causal; the engine never executes before the

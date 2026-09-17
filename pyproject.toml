@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,20 +7,26 @@ name = "quantbot"
 version = "0.1.0"
 description = "Quantitative trading research and backtesting bot (research only, no live trading)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 license = { text = "Proprietary - research use only" }
 authors = [{ name = "quant_trading_bot" }]
 dependencies = [
-    "numpy>=1.26",
-    "pandas>=2.1",
-    "scipy>=1.11",
-    "statsmodels>=0.14",
-    "matplotlib>=3.8",
-    "yfinance>=0.2.40",
+    "numpy==2.4.6",
+    "pandas==3.0.3",
+    "scipy==1.17.1",
+    "statsmodels==0.14.6",
+    "matplotlib==3.10.9",
+    "yfinance==1.4.1",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7.4"]
+dashboard = ["streamlit==1.58.0"]
+# Phase 2A has no broker SDK integration. Keep this install target explicit so
+# a future broker dependency cannot leak into the core environment unnoticed.
+broker = []
+
+[dependency-groups]
+dev = ["pytest==9.0.3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -32,4 +38,10 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
+
+[tool.uv]
+required-version = "==0.11.8"
+# Do not silently resolve transitive releases newer than the verified Phase 1
+# environment. Direct dependencies above remain pinned to their exact versions.
+exclude-newer = "2026-06-04T23:59:59Z"

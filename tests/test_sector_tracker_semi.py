@@ -43,9 +43,37 @@ def driver():
     return mod
 
 
+def _mu_companyfacts_fixture() -> dict:
+    """Minimal annual SEC payload for the two deterministic MU catalysts."""
+    def obs(fy: int, start: str, end: str, value: float) -> dict:
+        return {
+            "val": value, "fy": fy, "fp": "FY", "start": start,
+            "end": end, "form": "10-K", "accn": "fixture",
+        }
+
+    return {"facts": {"us-gaap": {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {
+            "units": {"USD": [
+                obs(2024, "2023-09-01", "2024-08-29", 10_000_000_000),
+                obs(2025, "2024-08-30", "2025-08-28", 15_000_000_000),
+            ]},
+        },
+        "NetIncomeLoss": {"units": {"USD": [
+            obs(2024, "2023-09-01", "2024-08-29", -1_000_000_000),
+            obs(2025, "2024-08-30", "2025-08-28", 2_000_000_000),
+        ]}},
+    }}}
+
+
 @pytest.fixture
-def run_output(tmp_path, driver):
+def run_output(tmp_path, driver, monkeypatch):
     """Invoke driver.main into tmp_path and return its summary + artefacts."""
+    mu_facts = _mu_companyfacts_fixture()
+    monkeypatch.setattr(driver, "_facts_cached", lambda ticker: ticker == "MU")
+    monkeypatch.setattr(
+        driver.SEC, "fetch_company_facts",
+        lambda ticker: mu_facts if ticker == "MU" else None,
+    )
     data_dir = tmp_path / "data"
     rep_dir = tmp_path / "reports"
     summary = driver.main(data_dir=data_dir, report_dir=rep_dir)

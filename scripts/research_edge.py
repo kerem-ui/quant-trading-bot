@@ -93,30 +93,17 @@ def s01_diagnostics(panel, sector_map, sc):
         rebalance_band=float(p.get("rebalance_band", 0.0)),
     )
     res = eng.run(S01TrendFollowing(p, sector_map=sector_map), panel, sector_map=sector_map)
-    w = res.weights.fillna(0.0)
-    rets = pd.DataFrame(
-        {s: df["adjusted_close"].pct_change() for s, df in panel.items()}
-    ).reindex(w.index)
-
-    # cost per symbol from filled orders
-    cost_by_sym: dict[str, list[tuple[pd.Timestamp, float]]] = {}
-    for o in res.orders:
-        if o.status.name == "FILLED":
-            cost_by_sym.setdefault(o.symbol, []).append((o.execution_date, o.cost))
-
+    quantities = res.quantities
     durations, net_pnls, gross_pnls = [], [], []
-    for sym in w.columns:
-        ws = w[sym]
-        for i0, i1 in _spells(ws):
-            d0, d1 = ws.index[i0], ws.index[i1]
+    for sym in quantities.columns:
+        for i0, i1 in _spells(quantities[sym], eps=0.0):
             dur = i1 - i0 + 1
-            seg_w = ws.iloc[i0:i1 + 1]
-            seg_r = rets[sym].iloc[i0:i1 + 1].fillna(0.0)
-            gross = float((seg_w * seg_r).sum())
-            c = sum(
-                cc for (dt, cc) in cost_by_sym.get(sym, [])
-                if d0 <= dt <= d1 + pd.Timedelta(days=4)
-            ) / res.initial_capital
+            # Include the actual exit bar's P&L and fees. The old four-calendar-
+            # day fee window could overlap a subsequent trade and double-count.
+            end = min(i1 + 1, len(quantities) - 1)
+            span = slice(i0, end + 1)
+            gross = float(res.gross_pnl[sym].iloc[span].sum()) / res.initial_capital
+            c = float((res.trading_costs[sym] + res.borrow_costs[sym]).iloc[span].sum()) / res.initial_capital
             durations.append(dur)
             gross_pnls.append(gross)
             net_pnls.append(gross - c)
@@ -125,7 +112,7 @@ def s01_diagnostics(panel, sector_map, sc):
     net = pd.Series(net_pnls)
     gross = pd.Series(gross_pnls)
     n_trades = len(dur)
-    years = len(w) / TRADING_DAYS_PER_YEAR
+    years = len(quantities) / TRADING_DAYS_PER_YEAR
     ta = res.turnover_attribution()
     m = compute_metrics(res)
 
@@ -146,7 +133,7 @@ def s01_diagnostics(panel, sector_map, sc):
         short = float((dur < 21).mean())
         print(f"  short trades (<21d, churn proxy): {short:.1%}")
 
-    print("\n[2] Per-trade NET PnL distribution (fraction of equity)")
+    print("\n[2] Per-trade NET PnL distribution (fraction of initial capital)")
     if n_trades:
         win = float((net > 0).mean())
         print(f"  mean={net.mean():+.5f}  median={net.median():+.5f}  "
