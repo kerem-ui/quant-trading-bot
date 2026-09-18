@@ -60,3 +60,20 @@ $python = 'C:\QuantEnvs\quant_trading_bot_phase2\Scripts\python.exe'
 ```
 
 The chosen output directory must not already exist. Generated CSV/JSON ledgers, trades, manifests, diagnostics and complete sensitivity results remain under ignored `runs/phase3c/UNIQUE_RUN_ID/`. Commit only source/tests/documentation, frozen portable metadata and small summary evidence; never commit source CSVs, large ledgers, market data or private inventory paths. Every output file is checksum-listed in the sealed run manifest.
+
+
+## This checkpoint
+
+The final pre-performance freeze is `research/phase3c/phase3c-20260918-v3/freeze.json`, recorded against runtime commit `8a9fde562badad337eb49f653c6965d9f7b34032`. The eleven completed scenarios are saved under ignored `runs/phase3c/phase3c-20260918-certified-v3/`.
+
+Two preparation defects were corrected without changing any strategy, risk limit, cost scenario, source datum or classification gate. The v1 preparation stopped on tuple serialization before performance execution. The v2 runs reconciled locally, but a fresh-checkout rehearsal exposed Git newline conversion in code/configuration files. Their evidence is preserved locally as superseded development output. The v3 specifications explicitly match every v2 strategy configuration, scenario, criterion and dataset identity.
+
+Code, configuration and legacy report **text** fingerprints now canonicalize CRLF to LF so an equivalent Git checkout passes. Market input and generated output fingerprints remain strictly byte-exact. Legacy report bytes are additionally captured at run start and checked unchanged after each scenario. `.gitattributes` pins the portable research JSON files to LF. Fresh index checkouts using both `core.autocrlf=true` and `false` passed all source/config/legacy-content guards and retained byte-identical sealed metadata. No production file or dependency was reformatted.
+
+Small committed summary evidence and run identities sit beside the freeze. Full run manifests, ledgers and source blobs remain local. To regenerate the human report after restoring and verifying the ignored run outputs:
+
+```powershell
+& $python scripts/report_phase3c.py --run runs/phase3c/phase3c-20260918-certified-v3 --verification research/phase3c/phase3c-20260918-v3/verification.json --output docs/phase3c_research_report.reproduced.md
+```
+
+The renderer refuses legacy directories and checks every output hash before formatting numbers. It creates a new file and never overwrites an existing report. The final verification metadata records exact suite counts and the test-first failures/fixes. All Phase 1, Phase 2 and Phase 3A/3B economic code and configuration values remain unchanged.
