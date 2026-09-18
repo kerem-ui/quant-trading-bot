@@ -201,3 +201,31 @@ def test_complete_freeze_serializes_periods_and_preserves_source(tmp_path,monkey
     assert spec['chronological_periods'][0]==['2010-2014','2010-01-01','2014-12-31']
     assert file_digest(source)==checksum
     assert file_digest(tmp_path/'runs/phase3c/unit/source_inputs/SPY.csv')==checksum
+
+
+def test_report_renderer_cannot_certify_legacy_outputs(tmp_path):
+    import runpy
+    path=Path(__file__).parents[1]/'scripts'/'report_phase3c.py'
+    module=runpy.run_path(str(path))
+    legacy=tmp_path/'reports'/'backtests'; legacy.mkdir(parents=True)
+    with pytest.raises(ValueError,match='Phase 3C'): module['render'](tmp_path,legacy)
+
+
+def test_git_newline_conversion_preserves_research_code_identity(tmp_path):
+    from quantbot.research.phase3c import code_files,guard
+    src=tmp_path/'src';src.mkdir();code=src/'example.py'
+    code.write_bytes(b'x = 1\r\ny = 2\n')
+    before=code_files(tmp_path)
+    code.write_bytes(b'x = 1\ny = 2\n')
+    assert code_files(tmp_path)==before
+    code.write_bytes(b'x = 2\ny = 2\n')
+    assert code_files(tmp_path)!=before
+
+
+def test_market_source_hash_remains_byte_exact_after_newline_conversion(tmp_path):
+    p=tmp_path/'SPY.csv'
+    p.write_bytes(b'date,open,high,low,close,adjusted_close,volume\r\n2020-01-02,10,11,9,10,10,100\r\n')
+    records=[{'symbol':'SPY','filename':'SPY.csv','sha256':file_digest(p)}]
+    assert load_sources(tmp_path,records)['SPY'].shape==(1,6)
+    p.write_bytes(p.read_bytes().replace(b'\r\n',b'\n'))
+    with pytest.raises(ValueError,match='checksum'):load_sources(tmp_path,records)

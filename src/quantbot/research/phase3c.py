@@ -81,10 +81,15 @@ def save_json(path,value):
     with path.open('xb') as handle: handle.write(json_bytes(portable(value)))
 
 
+def text_digest(path):
+    """Fingerprint Git text independent of checkout CRLF/LF; never use for data blobs."""
+    return digest(Path(path).read_bytes().replace(b'\r\n',b'\n'))
+
+
 def code_files(repo):
     """Fingerprint all runtime source, not just the Git parent revision."""
     files=sorted((repo/'src').rglob('*.py'))
-    return {p.relative_to(repo).as_posix():file_digest(p) for p in files}
+    return {p.relative_to(repo).as_posix():text_digest(p) for p in files}
 
 
 def prepare(repo: Path, freeze_id: str, inventory_path: Path) -> Path:
@@ -128,10 +133,12 @@ def prepare(repo: Path, freeze_id: str, inventory_path: Path) -> Path:
     legacy={p.relative_to(repo).as_posix():file_digest(p) for root in ['reports/backtests','reports/core']
             for p in sorted((repo/root).rglob('*')) if p.is_file()}
     spec=dict(freeze_id=freeze_id,engine_git_commit=git,code_files=code_files(repo),
-        config_files={name:file_digest(repo/name) for name in ['configs/strategy_configs.json',
+        config_files={name:text_digest(repo/name) for name in ['configs/strategy_configs.json',
             'configs/data_config.example.json','strategy_configs.json','uv.lock','pyproject.toml']},
         canonical_configuration=cfg,data_configuration=dc,strategy_specifications=specs,
         sources=records,dataset_identity=digest(json_bytes(records)),legacy_outputs=legacy,
+        legacy_text_hashes={name:text_digest(repo/name) for name in legacy},
+        text_fingerprint_convention='SHA256 after CRLF-to-LF normalization for Git text only; market inputs and generated outputs remain byte-exact',
         legacy_classification='LEGACY / NON-CERTIFIED; retained byte-for-byte for historical comparison',
         criteria=CRITERIA,chronological_periods=PERIODS,walk_forward='existing four expanding-history boundaries; continuous funded path; no fitting or reset; previously observed diagnostics',
         scenarios=['trading_0x','base','trading_2x','S03_borrow_0bp','S03_borrow_100bp'],
@@ -145,8 +152,12 @@ def prepare(repo: Path, freeze_id: str, inventory_path: Path) -> Path:
 def guard(repo,spec):
     """Refuse changed code, configuration, lockfile, or legacy artifacts."""
     if code_files(repo)!=spec['code_files']: raise ValueError('frozen runtime code changed')
-    for name,checksum in (spec['config_files']|spec['legacy_outputs']).items():
-        if file_digest(repo/name)!=checksum: raise ValueError('frozen config/legacy artifact changed: '+name)
+    for name,checksum in spec['config_files'].items():
+        if text_digest(repo/name)!=checksum: raise ValueError('frozen config changed: '+name)
+    legacy=spec.get('legacy_text_hashes',spec['legacy_outputs'])
+    checksum_fn=text_digest if 'legacy_text_hashes' in spec else file_digest
+    for name,checksum in legacy.items():
+        if checksum_fn(repo/name)!=checksum: raise ValueError('frozen legacy artifact changed: '+name)
 
 
 class AuditedPairs(S03PairsMeanReversion):
@@ -274,8 +285,11 @@ def execute(repo: Path, freeze_path: Path, run_id: str, source_directory: Path):
     area.mkdir(parents=True,exist_ok=False)
     save_json(area/'frozen_specification.json',sealed)
     summary={}; caught=[]
+    legacy_runtime_bytes={name:file_digest(repo/name) for name in spec['legacy_outputs']}
     input_identity={s:digest(pd.util.hash_pandas_object(f,index=True).values.tobytes()) for s,f in panel.items()}
     def verify_inputs():
+        if any(file_digest(repo/name)!=sha for name,sha in legacy_runtime_bytes.items()):
+            raise ValueError('legacy artifact bytes changed during run')
         if verify_freeze(freeze_path)['manifest_sha256'] != sealed['manifest_sha256']:
             raise ValueError('frozen specification changed during run')
         current={s:digest(pd.util.hash_pandas_object(f,index=True).values.tobytes()) for s,f in panel.items()}

@@ -1,0 +1,3 @@
+# Keep sealed portable research artifacts byte-identical in every Git checkout.
+/.gitattributes text eol=lf
+/research/phase3c/**/*.json text eol=lf
