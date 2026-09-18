@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import norm
 
-from .pricing import _d1_d2
+from .pricing import _d1_d2, _validate
 
 
 def bs_greeks(
@@ -18,9 +18,19 @@ def bs_greeks(
 ) -> dict:
     """Return delta, gamma, theta (per day), vega (per 1 vol pt), rho (per 1%)."""
     option_type = option_type.lower()
+    _validate(S, K, T, r, sigma, q, option_type)
     d1, d2 = _d1_d2(S, K, T, r, sigma, q)
     if d1 is None:
-        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
+        a, b = S * np.exp(-q*T), K * np.exp(-r*T)
+        if np.isclose(a, b, rtol=1e-14, atol=0):
+            return dict.fromkeys(("delta", "gamma", "theta", "vega", "rho"), float("nan"))
+        active = a > b if option_type == "call" else b > a
+        sign = 1 if option_type == "call" else -1
+        return {"delta": float(sign * np.exp(-q*T) if active else 0.),
+                "gamma": 0., "vega": 0.,
+                "theta": (float(sign * (q*a-r*b)/365 if active else 0.)
+                          if T > 0 else float("nan")),
+                "rho": float(sign*T*b/100 if active else 0.)}
     pdf = norm.pdf(d1)
     disc_q = np.exp(-q * T)
     sqrtT = np.sqrt(T)

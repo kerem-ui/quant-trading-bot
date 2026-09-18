@@ -83,8 +83,11 @@ class OptionsChain:
         sub = self.on_date(date).type("call").df
         if sub.empty:
             return pd.DataFrame()
-        return sub.pivot_table(index="strike", columns="dte",
-                                values="implied_volatility", aggfunc="mean")
+        if sub["underlying"].nunique()!=1:
+            raise ValueError("surface slice requires one underlying")
+        if sub.duplicated(["strike","dte"]).any():
+            raise ValueError("duplicate surface identity cannot be averaged")
+        return sub.pivot(index="strike", columns="dte", values="implied_volatility")
 
     def expirations(self) -> list[pd.Timestamp]:
         return sorted(pd.to_datetime(self.df["expiration"].unique()).tolist())

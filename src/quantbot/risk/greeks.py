@@ -53,10 +53,10 @@ def aggregate_structure_greeks(structures: list) -> PortfolioGreeks:
         ml = s.max_loss()
         agg = agg.add(
             PortfolioGreeks(
-                g.get("delta", 0.0),
-                g.get("gamma", 0.0),
-                g.get("theta", 0.0),
-                g.get("vega", 0.0),
+                (g["delta"] if g.get("delta") is not None and isfinite(g["delta"]) else float("nan")),
+                (g["gamma"] if g.get("gamma") is not None and isfinite(g["gamma"]) else float("nan")),
+                (g["theta"] if g.get("theta") is not None and isfinite(g["theta"]) else float("nan")),
+                (g["vega"] if g.get("vega") is not None and isfinite(g["vega"]) else float("nan")),
                 defined_loss_magnitude(ml),
             )
         )

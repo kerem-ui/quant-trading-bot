@@ -21,6 +21,7 @@ OPTIONS_SCHEMA = (
     "date", "underlying", "expiration", "dte", "option_type", "strike",
     "bid", "ask", "mid", "volume", "open_interest", "implied_volatility",
     "delta", "gamma", "theta", "vega", "contract_multiplier",
+    "exercise_style", "metadata_source",
 )
 
 
@@ -73,6 +74,8 @@ def synthetic_option_chain(
                         "theta": g["theta"],
                         "vega": g["vega"],
                         "contract_multiplier": 100,
+                        "exercise_style": "european",
+                        "metadata_source": "synthetic_european_model_not_contract_reference",
                     }
                 )
     return pd.DataFrame(rows, columns=list(OPTIONS_SCHEMA))

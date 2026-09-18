@@ -90,6 +90,7 @@ class BacktestPosition:
         net_close_cash = 0.0
         marks = []
         delta = gamma = theta = vega = 0.0
+        missing_greeks = set()
         for leg in self.legs:
             context = f"{leg.identity} on {pd.Timestamp(as_of).date()}"
             try:
@@ -107,12 +108,13 @@ class BacktestPosition:
             close_px = bid if leg.qty > 0 else ask
             marks.append(close_px)
             net_close_cash += leg.qty * close_px * leg.multiplier
-            # Provider Greeks are per-1-contract delta etc.; aggregate to
-            # position scale (qty * multiplier).
+            # Provider fields are preserved in their supplied per-share units;
+            # unknown fields propagate, and vendor units remain uncertified.
             for nm, accum in (("delta", "d"), ("gamma", "g"),
                               ("theta", "t"), ("vega", "v")):
                 v = row.get(nm)
-                if pd.isna(v):
+                if pd.isna(v) or not np.isfinite(v):
+                    missing_greeks.add(nm)
                     continue
                 if nm == "delta":
                     delta += leg.qty * float(v) * leg.multiplier
@@ -136,6 +138,9 @@ class BacktestPosition:
             "delta": float(delta), "gamma": float(gamma),
             "theta": float(theta), "vega": float(vega),
         }
+        for name in missing_greeks:
+            record[name] = float("nan")
+        record["greek_source"] = "provider_units_unverified"
         self.daily_records.append(record)
         return record
 

@@ -43,6 +43,14 @@ def scan_parity_violations(
     Uses executable prices (cross the spread): buy at ask, sell at bid. Returns
     a DataFrame of *flags only* - no orders are ever generated.
     """
+    if "underlying" in chain and chain["underlying"].nunique()>1:
+        raise ValueError("parity requires one underlying")
+    if "date" in chain and chain["date"].nunique()>1:
+        raise ValueError("parity requires one valuation date")
+    if european_only:
+        if "exercise_style" not in chain:
+            raise ValueError("exercise style required for European parity")
+        chain = chain[chain["exercise_style"]=="european"]
     cm = cost_model or OptionsCostModel()
     rows = []
     for (exp, K), grp in chain.groupby(["expiration", "strike"]):
@@ -77,6 +85,7 @@ def scan_parity_violations(
                     "est_cost_per_share": round(cost, 4),
                     "safety_buffer": safety_buffer,
                     "flag": "PARITY_DEVIATION",
+                    "model_status": "european" if european_only else "european_approximation_exercise_not_enforced",
                     "note": "stale-data/dividend/borrow more likely than arb"
                     + ("" if european_only else "; check early exercise"),
                 }

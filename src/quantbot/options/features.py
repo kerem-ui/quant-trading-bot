@@ -75,37 +75,44 @@ def realized_vol_features(spot: pd.Series,
 # =========================================================================== #
 def _select_expiration_near(chain_today: pd.DataFrame, target_dte: int,
                              dte_band: tuple[int, int]) -> pd.Timestamp | None:
-    """Expiration whose DTE is closest to target within [lo,hi]; fallback to
-    the globally-closest expiration if none is in band. None if empty."""
+    """Closest expiration strictly inside the requested DTE band; no fallback."""
     if chain_today.empty:
         return None
     lo, hi = dte_band
     grp = chain_today.groupby("expiration")["dte"].first()
     in_band = grp[(grp >= lo) & (grp <= hi)]
-    pool = in_band if not in_band.empty else grp
+    if in_band.empty:
+        return None
+    pool = in_band
     chosen = pool.iloc[(pool - target_dte).abs().argsort()].index[0]
     return pd.Timestamp(chosen)
 
 
-def _iv_at_delta(sub: pd.DataFrame, option_type: str,
-                 target_delta: float,
-                 max_delta_dist: float | None = None) -> float:
-    """IV of the row whose signed delta is closest to ``target_delta`` for
-    the given option_type (drops NaN IV/delta). NaN if none.
+def delta_selection(sub, option_type, target_delta, max_delta_dist=None):
+    """Deterministic nearest signed delta; report actual strike/delta/distance.
 
-    If ``max_delta_dist`` is given, the nearest available delta must be
-    within that distance of the target, otherwise NaN is returned. This
-    prevents mislabeling (e.g. reporting ATM IV as a '25-delta IV' when no
-    option near 0.25 delta exists)."""
-    s = sub[(sub["option_type"].str.lower() == option_type.lower())]
-    s = s.dropna(subset=["delta", "implied_volatility"])
+    Invalid observations stay in input but cannot become an analytic estimate.
+    Missing IV/delta never becomes zero. Tie break: lowest strike.
+    """
+    result = dict(iv=np.nan, selected_delta=np.nan, delta_distance=np.nan,
+                  selected_strike=np.nan, status="unavailable")
+    s = sub[sub["option_type"].str.lower() == option_type.lower()].copy()
+    iv, delta = s["implied_volatility"], s["delta"]
+    s = s[np.isfinite(iv) & (iv > 0) & np.isfinite(delta) &
+          (delta.between(0, 1) if option_type == "call" else delta.between(-1, 0))]
     if s.empty:
-        return float("nan")
-    dist = (s["delta"] - target_delta).abs()
-    idx = dist.idxmin()
-    if max_delta_dist is not None and float(dist.loc[idx]) > max_delta_dist:
-        return float("nan")
-    return float(s.loc[idx, "implied_volatility"])
+        return result
+    s["distance"] = (s["delta"] - target_delta).abs()
+    r = s.sort_values(["distance", "strike"], kind="stable").iloc[0]
+    result.update(selected_delta=float(r["delta"]), delta_distance=float(r["distance"]),
+                  selected_strike=float(r["strike"]))
+    if max_delta_dist is not None and r["distance"] > max_delta_dist:
+        return result | {"status": "outside_delta_tolerance"}
+    return result | {"iv": float(r["implied_volatility"]), "status": "observed_nearest"}
+
+
+def _iv_at_delta(sub, option_type, target_delta, max_delta_dist=None):
+    return delta_selection(sub, option_type, target_delta, max_delta_dist)["iv"]
 
 
 def _atm_iv(sub: pd.DataFrame) -> float:
@@ -135,6 +142,15 @@ def iv_summary_for_date(chain_today: pd.DataFrame, *,
     }
     if chain_today.empty:
         return row
+    if ("underlying" in chain_today and chain_today["underlying"].nunique()!=1):
+        raise ValueError("one underlying required")
+    if chain_today["date"].nunique()!=1:
+        raise ValueError("one valuation date required")
+    chain_today=chain_today.copy()
+    iv=chain_today["implied_volatility"]
+    invalid=iv.notna() & (~np.isfinite(iv) | (iv<=0))
+    row["invalid_iv_count"]=int(invalid.sum())
+    chain_today.loc[invalid,"implied_volatility"]=np.nan
     row["iv_coverage"] = float(chain_today["implied_volatility"].notna().mean())
     row["median_iv_calls"] = float(
         chain_today.loc[chain_today["option_type"].str.lower() == "call",
@@ -157,6 +173,12 @@ def iv_summary_for_date(chain_today: pd.DataFrame, *,
     row["iv_25d_put"] = _iv_at_delta(sub, "put", -0.25, max_delta_dist=0.10)
     row["iv_30d_call"] = _iv_at_delta(sub, "call", 0.30, max_delta_dist=0.10)
     row["iv_30d_put"] = _iv_at_delta(sub, "put", -0.30, max_delta_dist=0.10)
+    for label, right, target, tolerance in (
+        ("atm_call", "call", .5, None), ("atm_put", "put", -.5, None),
+        ("iv_25d_call", "call", .25, .1), ("iv_25d_put", "put", -.25, .1),
+        ("iv_30d_call", "call", .30, .1), ("iv_30d_put", "put", -.30, .1)):
+        selection = delta_selection(sub, right, target, tolerance)
+        row.update({label + "_" + k: v for k, v in selection.items() if k != "iv"})
     return row
 
 
@@ -293,6 +315,10 @@ def term_structure_for_date(chain_today: pd.DataFrame, *,
            "far_dte": np.nan, "ts_slope": np.nan, "ts_ratio": np.nan}
     if chain_today.empty:
         return out
+    if "underlying" in chain_today and chain_today["underlying"].nunique()!=1:
+        raise ValueError("one underlying required")
+    if chain_today["date"].nunique()!=1:
+        raise ValueError("one valuation date required")
     for name, band in (("near", near), ("mid", mid), ("far", far)):
         target = (band[0] + band[1]) // 2
         exp = _select_expiration_near(chain_today, target, band)
