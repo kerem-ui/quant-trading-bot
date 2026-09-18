@@ -1,3 +1,5 @@
+> **Research status:** Performance claims and files under `reports/backtests/` and `reports/core/` are preserved **legacy / non-certified** results. Phase 3C uses separate frozen specifications and reconciled runs; see [the research protocol](docs/phase3c_research_protocol.md). No historical result is proof of alpha or live readiness.
+
 # quant_trading_bot — Quantitative Trading **Research / Backtesting** Bot
 
 > **Research and backtesting only. This project does NOT trade.**
