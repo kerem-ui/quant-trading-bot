@@ -18,7 +18,7 @@ into testable, cost-aware, look-ahead-safe backtests.
 | Strategy | Status | Side | Rebalance | Notes |
 |---|---|---|---|---|
 | **S01** Multi-Asset Vol-Targeted Trend Following | ✅ active | long-only | weekly | inverse-vol sizing, ATR trailing stop, cost filter |
-| **S03** Pairs / Stat-Arb Mean Reversion | ✅ active | dollar-neutral (long+short ETF legs) | weekly | **monthly walk-forward pair reselection**, borrow cost on short leg |
+| **S03** Pairs / Stat-Arb Mean Reversion | ✅ active | hedge-ratio matched (long+short ETF legs) | weekly | **monthly walk-forward pair reselection**, borrow cost on short leg |
 | **S02** Cross-Sectional Factor Blend | ✅ active | long-only | monthly | price-only factors (v1 limitation) |
 | S04 Carry / Term Structure | ⛔ inactive | — | — | needs futures-chain data (not available v1) |
 | S05–S08 Options vol strategies | ⛔ inactive | — | — | need historical options chains; options *utilities* are built & tested |
@@ -1083,7 +1083,7 @@ Markdown/CSV tearsheets, and a pytest suite (**137 tests**).
 - Research/backtest only — no broker, no live execution.
 - **ETF-only** universe; **free daily OHLCV** (yfinance) with a deterministic
   **synthetic fallback** so the repo always runs offline.
-- S01 & S02 **long-only**; S03 **dollar-neutral** with genuine long + short ETF legs.
+- S01 & S02 **long-only**; S03 **hedge-ratio matched** with genuine long + short ETF legs.
 - Transaction costs, slippage, bid/ask spread modelled on every trade; S03 also
   charges a daily **borrow cost** on the short leg.
 - **No look-ahead**, enforced at two independent layers (causal strategy
@@ -1123,7 +1123,7 @@ configs/risk_config.json        # copy from risk_config.example.json to override
 
 ```bash
 python scripts/run_s01.py        # S01 trend following  (long-only, weekly)
-python scripts/run_s03.py        # S03 pairs            (dollar-neutral, weekly, monthly reselect)
+python scripts/run_s03.py        # S03 pairs            (hedge-ratio matched, weekly sizing, daily exits, monthly reselect)
 python scripts/run_s02.py        # S02 factor blend     (long-only, monthly)
 
 # Force the offline deterministic dataset (no network):
@@ -1232,3 +1232,15 @@ scripts/{run_s01,run_s02,run_s03}.py     tests/  configs/  data/  reports/
 Real options-chain ingestion → activate S05/S09 properly · futures chain →
 S04 · combined multi-strategy portfolio · paper-trading harness with manual
 review gate. **Live trading remains out of scope until external validation.**
+
+
+### Phase 3B execution conventions
+
+S03 retains `spread = A - beta * B` and executes quantities proportional to
+`(+1, -beta)` for a long spread (reversed for a short spread). Exact dollar
+neutrality was mathematically inconsistent with that spread and is no longer
+required. Configured net, gross, sector and position caps remain constraints;
+structured targets use one common scale and atomic execution.
+
+See [Phase 3B execution mechanics](docs/phase3b_execution_mechanics.md) for
+capacity assumptions, cadence, diagnostics, numerical reconciliation and tests.

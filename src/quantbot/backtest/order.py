@@ -7,7 +7,7 @@ is what prevents look-ahead, and it is asserted by the engine and tested.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import pandas as pd
@@ -39,6 +39,11 @@ class Order:
     notional: float = 0.0  # absolute executed dollar notional
     quantity_before: float = 0.0
     allocation_equity: float = 0.0  # common pre-cost execution-batch equity
+    target_quantity: float | None = None  # off-cycle exits/reductions freeze held units
+    intended_quantity: float = 0.0
+    execution_outcome: str = 'pending'
+    cost_components: dict[str,float] = field(default_factory=dict)
+    liquidity_notional: float | None = None
 
     def __post_init__(self) -> None:
         if pd.Timestamp(self.execution_date) <= pd.Timestamp(self.signal_date):

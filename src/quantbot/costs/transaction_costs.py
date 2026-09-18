@@ -45,9 +45,19 @@ class EquityCostModel:
 
     def cost(self, trade_value: float, participation: float = 0.0) -> float:
         """Dollar cost for a single trade of ``abs(trade_value)`` notional."""
+        return sum(self.components(trade_value,participation).values())
+
+    def components(self, trade_value: float, participation: float = 0.0) -> dict[str,float]:
+        """Separate cash charges; the observed fill price is not also adjusted."""
         tv = abs(float(trade_value))
-        c = tv * self.one_way_bps(participation) / 1e4
-        return max(self.min_commission, c) if tv > 0 else 0.0
+        values = (tv,self.commission_bps,self.half_spread_bps,self.slippage.fixed_bps,
+                  self.slippage.impact_coef_bps,self.min_commission,participation)
+        if any(not isfinite(x) or x < 0 for x in values):
+            raise ValueError('cost inputs must be finite and nonnegative')
+        return dict(commission=max(self.min_commission,tv*self.commission_bps/1e4) if tv else 0.,
+                    spread=tv*self.half_spread_bps/1e4,
+                    slippage=tv*self.slippage.fixed_bps/1e4,
+                    impact=tv*(self.slippage.slippage_bps(participation)-self.slippage.fixed_bps)/1e4)
 
     def passes_cost_filter(
         self, expected_edge_bps: float, cost_multiplier: float = 3.0

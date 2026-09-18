@@ -25,7 +25,7 @@ from ..indicators.trend import (
     compute_trend_score,
     consecutive_below_ema,
 )
-from ..indicators.volatility import atr, daily_returns, realized_vol
+from ..indicators.volatility import atr, adjusted_ohlc, daily_returns, realized_vol
 from .base import Strategy
 
 
@@ -82,6 +82,7 @@ def size_by_conviction(
 
 class S01TrendFollowing(Strategy):
     name = "S01_trend_following"
+    daily_exits = True
 
     def __init__(self, config: dict | None = None, sector_map: dict | None = None,
                  cost_model: EquityCostModel | None = None):
@@ -115,12 +116,27 @@ class S01TrendFollowing(Strategy):
         self.confirm_days = int(c.get("s01_confirm_days", 1))
         self.conviction_lookbacks = tuple(c.get("s01_conviction_lookbacks", (60, 120)))
 
+    def execution_exit(self, symbol, date, df, entry_index, current_index):
+        """Daily exit guard on actual holdings, with a fill-based minimum hold.
+
+        Hard ATR stops use the peak since the executed entry. Soft exits keep
+        the existing trend/EMA thresholds and wait the configured sessions.
+        """
+        inputs = self._execution_exit_inputs[symbol]
+        close = df.at[date,'adjusted_close']
+        held_sessions = current_index-entry_index+1
+        peak = df.loc[:date,'adjusted_close'].iloc[-held_sessions:].max()
+        a = inputs['atr'].loc[date]
+        hard = np.isfinite(a) and close < peak-self.atr_mult*a
+        soft = inputs['soft'].loc[date]
+        return bool(hard or (soft and current_index-entry_index >= self.min_holding_days))
+
     # --- per-symbol causal position path -----------------------------------
     def _position_path(self, df: pd.DataFrame) -> pd.Series:
         score = compute_trend_score(df, self.lookbacks)
         base = generate_trend_signals(score, self.entry_threshold, self.exit_threshold)
         below3 = consecutive_below_ema(df, 50) >= 3
-        atr14 = atr(df, self.atr_window)
+        atr14 = atr(adjusted_ohlc(df), self.atr_window)
         close = df["adjusted_close"]
 
         # V2: the cost filter gates ENTRIES only. A held position is no longer
@@ -177,7 +193,7 @@ class S01TrendFollowing(Strategy):
         score = compute_trend_score(df, lbs, weights=eq_w)
         base = generate_trend_signals(score, self.entry_threshold, self.exit_threshold)
         below3 = consecutive_below_ema(df, 50) >= 3
-        atr14 = atr(df, self.atr_window)
+        atr14 = atr(adjusted_ohlc(df), self.atr_window)
         close = df["adjusted_close"]
 
         rt_bps = self.cost_model.round_trip_bps()
@@ -234,6 +250,13 @@ class S01TrendFollowing(Strategy):
             else self._position_path
         )
         sig = {s: path(df) for s, df in panel.items()}
+        self._execution_exit_inputs = {}
+        for symbol, df in panel.items():
+            lbs = self.conviction_lookbacks if self.execution_mode == 'conviction' else self.lookbacks
+            kwargs = {'weights':tuple([1/len(lbs)]*len(lbs))} if self.execution_mode == 'conviction' else {}
+            base = generate_trend_signals(compute_trend_score(df,lbs,**kwargs),self.entry_threshold,self.exit_threshold)
+            self._execution_exit_inputs[symbol] = dict(soft=(base==0)|(consecutive_below_ema(df,50)>=3),
+                                                       atr=atr(adjusted_ohlc(df),self.atr_window))
         self._signals = pd.DataFrame(sig).sort_index()
         return self._signals
 

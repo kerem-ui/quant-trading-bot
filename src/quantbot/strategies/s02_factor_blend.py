@@ -49,12 +49,19 @@ class S02FactorBlend(Strategy):
         prices = self._wide(panel, "adjusted_close")
         volume = self._wide(panel, "volume")
         factors = build_price_only_factors(prices, volume)
-        score = composite_score(factors, self.factor_weights)
 
         # Causal liquidity / price eligibility mask.
-        adv = (prices * volume).rolling(21, min_periods=10).mean()
-        eligible = (prices >= self.min_price) & (adv >= self.min_adv)
-        score = score.where(eligible)
+        raw_close = self._wide(panel, 'close')
+        adv = (raw_close * volume).rolling(21, min_periods=10).mean()
+        eligible = (raw_close >= self.min_price) & (adv >= self.min_adv)
+        # Liquidity is raw dollars traded, not adjusted units times raw shares.
+        if 'liquidity' in factors:
+            factors['liquidity'] = adv
+        active_factors = {name:weight for name,weight in self.factor_weights.items() if weight != 0}
+        for name in active_factors:
+            eligible &= np.isfinite(factors[name])
+        score = composite_score({name:frame.where(eligible) for name,frame in factors.items()},
+                                active_factors)
         self._signals = score
         return score
 

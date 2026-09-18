@@ -24,8 +24,9 @@ class Strategy(ABC):
     rebalance_frequency: str = "weekly"
     long_only: bool = True
     # V2 risk hooks read by the engine -> RiskManager:
-    #   market_neutral=True  -> vol targeting may lever the (hedged) book up
-    #                           toward target, bounded by the gross cap.
+    #   market_neutral=True -> exact net-zero constraint plus hedged vol hint.
+    #   hedged=True alone -> hedged vol hint without imposing zero net.
+    #   preserve_ratios=True -> common scaling and atomic structured execution.
     #   allow_leverage_up    -> directional opt-in for two-sided vol targeting
     #                           (None = use RiskManager default = off).
     market_neutral: bool = False

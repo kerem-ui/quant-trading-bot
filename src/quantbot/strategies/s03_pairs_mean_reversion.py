@@ -1,6 +1,6 @@
 """S03 - Pairs / Statistical-Arbitrage Mean Reversion.
 
-Dollar-neutral (long one ETF, short the related ETF), weekly rebalance with
+Hedge-ratio matched (quantities proportional to +1, -beta), weekly rebalance with
 **monthly walk-forward pair reselection**. ETF universe only.
 
 Anti-look-ahead:
@@ -83,26 +83,38 @@ def generate_pair_signals(
 
 
 def build_pair_orders(
-    pair_signal: int, hedge_ratio: float, risk_per_pair: float
+    pair_signal: int, hedge_ratio: float, risk_per_pair: float,
+    *, price_a: float = 1.0, price_b: float = 1.0,
 ) -> dict[str, float]:
-    """Dollar-neutral leg weights for one pair given its current signal.
+    """Allocate gross weight 2*risk_per_pair to quantities k*(signal,-signal*beta).
 
-    Equal dollar long/short (net ~0). Hedge ratio drives the spread definition
-    and entry/exit; equal-dollar legs keep the book dollar-neutral as required.
+    Prices must use the signal's adjusted units. Unit-price defaults are only
+    for standalone algebra; the strategy and execution layer supply prices.
+    Positive beta is required for this long/short ETF strategy. The allocation
+    parameter retains its legacy gross budget, not a claimed stop-loss amount.
     """
+    if not np.isfinite(hedge_ratio) or hedge_ratio <= 0:
+        raise ValueError('S03 beta must be finite and positive')
+    if pair_signal not in (-1,0,1):
+        raise ValueError('pair signal must be -1, 0 or 1')
+    if any(not np.isfinite(x) or x <= 0 for x in (price_a,price_b)):
+        raise ValueError('pair prices must be finite and positive')
+    if not np.isfinite(risk_per_pair) or risk_per_pair < 0:
+        raise ValueError('pair allocation must be finite and nonnegative')
     if pair_signal == 0:
         return {"a": 0.0, "b": 0.0}
-    # signal +1 => long A, short B ; -1 => short A, long B
-    return {"a": risk_per_pair * pair_signal, "b": -risk_per_pair * pair_signal}
+    k = 2*risk_per_pair / (price_a + hedge_ratio*price_b)
+    return {"a": k*pair_signal*price_a, "b": -k*pair_signal*hedge_ratio*price_b}
 
 
 class S03PairsMeanReversion(Strategy):
     name = "S03_pairs_mean_reversion"
-    long_only = False  # dollar-neutral: long + short ETF legs
-    # V2: a hedged book - tell the RiskManager not to crush it with the
-    # invalid fully-correlated vol proxy; sizing is governed by target_gross
-    # and the hard gross cap (still bounded by max_gross_exposure).
-    market_neutral = True
+    long_only = False
+    # The hedged volatility hint is separate from exact net neutrality.
+    # Common book scaling preserves each component pair's quantity ratio.
+    market_neutral = False
+    hedged = True
+    preserve_ratios = True
 
     def __init__(self, config: dict | None = None, sector_map: dict | None = None):
         super().__init__(config, sector_map)
@@ -121,9 +133,9 @@ class S03PairsMeanReversion(Strategy):
         self.risk_per_pair = float(c.get("risk_per_pair", 0.005))
         self.max_active_pairs = int(c.get("max_active_pairs", 20))
         self.max_pairs_per_symbol = int(c.get("max_pairs_per_symbol", 3))
-        # V2 exposure controls. ``target_gross`` scales the whole dollar-neutral
+        # ``target_gross`` scales the whole hedge-matched book
         # book to a meaningful gross each rebalance; longs and shorts are scaled
-        # by the SAME factor so net stays ~0 (dollar-neutrality preserved).
+        # by the SAME factor, preserving every pair's hedge ratio.
         self.target_gross = float(c.get("target_gross", 0.0))  # 0 -> off (V1)
         self.min_half_life = float(c.get("min_half_life", 3.0))
         self.max_half_life = float(c.get("max_half_life", 30.0))
@@ -164,6 +176,7 @@ class S03PairsMeanReversion(Strategy):
         dates = prices.index
         symbols = list(prices.columns)
         weights = pd.DataFrame(0.0, index=dates, columns=symbols)
+        self.pair_targets = {}
 
         reselect_dates = sorted(set(month_starts(dates)))
         active_pairs: list[tuple[str, str]] = []
@@ -173,6 +186,7 @@ class S03PairsMeanReversion(Strategy):
 
         # Walk-forward: only ever look at prices up to the current date.
         for i, date in enumerate(dates):
+            self.pair_targets[date] = []
             if (
                 next_reselect_idx < len(reselect_dates)
                 and date >= reselect_dates[next_reselect_idx]
@@ -186,6 +200,7 @@ class S03PairsMeanReversion(Strategy):
                 continue
 
             row = pd.Series(0.0, index=symbols)
+            specs = []
             for (a, b) in active_pairs:
                 key = (a, b)
                 if key not in cache:
@@ -206,17 +221,21 @@ class S03PairsMeanReversion(Strategy):
                     cache[key] = {"sig": sig, "hr": hr}
                 sig_i = int(cache[key]["sig"].iloc[i])
                 hr_i = cache[key]["hr"].iloc[i]
-                if sig_i == 0 or not np.isfinite(hr_i):
+                if sig_i == 0:
                     continue
-                legs = build_pair_orders(sig_i, float(hr_i), self.risk_per_pair)
+                legs = build_pair_orders(sig_i, float(hr_i), self.risk_per_pair,
+                                         price_a=prices.at[date,a], price_b=prices.at[date,b])
+                specs.append(dict(a=a,b=b,beta=float(hr_i),signal=sig_i,gross=2*self.risk_per_pair))
                 row[a] += legs["a"]
                 row[b] += legs["b"]
-            # V2: size the whole dollar-neutral book to target_gross. Uniform
-            # scaling keeps net == 0 exactly (dollar-neutrality preserved); it
-            # only changes how much capital the active pairs deploy.
+            # Scale the netted book uniformly; all component pair allocations
+            # receive the same multiplier. Net exposure need not be zero.
             gross = float(row.abs().sum())
             if self.target_gross > 0.0 and gross > 1e-12:
                 row = row * (self.target_gross / gross)
+                for spec in specs:
+                    spec['gross'] *= self.target_gross/gross
+            self.pair_targets[date] = specs
             weights.loc[date] = row.values
 
         self._signals = weights.apply(np.sign)

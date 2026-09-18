@@ -46,6 +46,17 @@ def atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
     return tr.ewm(alpha=1.0 / window, adjust=False, min_periods=window).mean()
 
 
+def adjusted_ohlc(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert each OHLC bar to adjusted research units without changing input."""
+    factor = df['adjusted_close']/df['close']
+    if ((factor <= 0) | ~np.isfinite(factor)).any():
+        raise ValueError('adjusted OHLC requires finite positive adjustment factors')
+    out = df.copy()
+    for name in ('open','high','low','close'):
+        out[name] = df[name]*factor
+    return out
+
+
 def rolling_drawdown(series: pd.Series) -> pd.Series:
     """Drawdown of a price/equity series vs its running maximum (<= 0)."""
     running_max = series.cummax()

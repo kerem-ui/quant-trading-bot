@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from quantbot.backtest.engine import BacktestEngine
 from quantbot.risk.risk_manager import RiskManager
@@ -53,23 +54,26 @@ def test_corr_break_forces_exit():
     assert sig.iloc[2] == 0  # exited because correlation broke
 
 
-def test_build_pair_orders_dollar_neutral():
+def test_build_pair_orders_matches_level_price_spread():
     legs = build_pair_orders(1, hedge_ratio=1.3, risk_per_pair=0.01)
-    assert legs["a"] == 0.01 and legs["b"] == -0.01
-    assert legs["a"] + legs["b"] == 0.0  # dollar-neutral
+    # Phase 3B approved spec: equal dollars contradict A-beta*B at beta != 1.
+    assert abs(legs['a']) + abs(legs['b']) == pytest.approx(.02)
+    assert legs['b'] == pytest.approx(-1.3*legs['a'])
     flat = build_pair_orders(0, 1.0, 0.01)
     assert flat == {"a": 0.0, "b": 0.0}
 
 
-def test_s03_dollar_neutral_and_has_short_leg(panel, sector_map):
+def test_s03_hedge_matched_and_has_short_leg(panel, sector_map):
     s = S03PairsMeanReversion(
         {"max_active_pairs": 10, "risk_per_pair": 0.01}, sector_map=sector_map
     )
     res = BacktestEngine(
         risk_manager=RiskManager({}), borrow_cost_bps_annual=50.0
     ).run(s, panel, sector_map=sector_map)
-    net = res.weights.sum(axis=1)
-    assert net.abs().mean() < 0.05  # dollar-neutral on average
+    for event in res.ledger:
+        if event['event'] == 'pair_batch' and event['accepted']:
+            for pair in event['pairs']:
+                assert pair['quantity_b'] == pytest.approx(-pair['beta']*pair['quantity_a'])
     assert (res.weights.values < -1e-9).any()  # genuine short legs exist
     assert (res.weights.values > 1e-9).any()
 

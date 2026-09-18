@@ -3,7 +3,7 @@
 - engine cost split (trading + borrow == total)
 - turnover attribution sums to annual turnover
 - cost attribution (buy+sell == trading; borrow split)
-- exposure diagnostics (active-day vs all-day) and S03 stays ~dollar-neutral
+- exposure diagnostics (active-day vs all-day) and S03 preserves price-spread hedges
 - benchmark now exposes absolute Sharpe for strat & bench
 - quarterly rebalance support
 - param_sensitivity is display-only (does not mutate base config / defaults)
@@ -87,8 +87,14 @@ def test_exposure_diagnostics_active_vs_all_day(panel, sector_map):
         # Active-day gross must exceed the (diluted) all-day average for an
         # opportunistic book - this is exactly the clarity V2.1 adds.
         assert ed["active_avg_gross"] >= ed["all_day_avg_gross"]
-        # S03 still ~dollar-neutral on active days.
-        assert ed["active_abs_net_over_gross"] < 0.20
+        # Phase 3B: report actual net, not an obsolete dollar-neutral promise.
+        active = res.weights.abs().sum(axis=1) > 1e-6
+        actual = (res.weights.sum(axis=1).abs()/res.weights.abs().sum(axis=1))[active].mean()
+        assert np.isclose(ed['active_abs_net_over_gross'], actual)
+        for event in res.ledger:
+            if event['event'] == 'pair_batch' and event['accepted']:
+                for pair in event['pairs']:
+                    assert np.isclose(pair['quantity_b'], -pair['beta']*pair['quantity_a'])
 
 
 # --------------------------------------------------------------------------- #

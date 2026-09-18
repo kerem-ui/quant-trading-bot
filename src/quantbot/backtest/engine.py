@@ -13,7 +13,7 @@ For every rebalance date ``t``:
      hard-asserts ``execution_date > signal_date``.
   4. Fills occur at ``t+1``'s open or close (config) via SimulatedBroker.
 
-Costs are charged on every executed trade. The short leg of dollar-neutral
+Costs are charged on every executed trade. The short leg of hedge-matched
 strategies (S03) is additionally charged a daily borrow cost.
 
 This is research/backtest only. No broker connectivity exists anywhere.
@@ -36,6 +36,7 @@ from .market_mechanics import CashBalanceModel, CorporateActionBook
 from .broker import SimulatedBroker
 from .order import Order, OrderStatus
 from .position import Portfolio, required_mark
+from .structured_execution import reprice_pairs, reject_atomic
 
 log = get_logger("backtest.engine")
 
@@ -67,6 +68,7 @@ class BacktestResult:
     financing_cost: float = 0.0
     pnl_components: pd.DataFrame = field(default_factory=pd.DataFrame)
     sessions: pd.DataFrame = field(default_factory=pd.DataFrame)
+    decisions: list[dict] = field(default_factory=list)
 
     @property
     def turnover_by_symbol(self) -> pd.DataFrame:
@@ -126,6 +128,9 @@ class BacktestResult:
             if o.status == OrderStatus.FILLED and o.executed_quantity < 0
         )
         return {
+            **{name:float(sum(o.cost_components.get(name,0.) for o in self.orders
+                              if o.status == OrderStatus.FILLED))
+               for name in ('commission','spread','slippage','impact')},
             "trading_cost": float(self.trading_cost),
             "borrow_cost": float(self.borrow_cost),
             "financing_cost": float(self.financing_cost),
@@ -180,7 +185,9 @@ class BacktestEngine:
         cash_interest_rate: float = 0.0,
         financing_rate: float | None = None,
         borrow_day_count: str = "sessions_252",
+        max_participation: float | None = None,
     ):
+        self.max_participation = max_participation
         self.cost_model = cost_model or EquityCostModel()
         self.risk_manager = risk_manager
         self.execution = execution
@@ -252,7 +259,12 @@ class BacktestEngine:
         allow_leverage_up = getattr(strategy, "allow_leverage_up", None)
 
         portfolio = Portfolio(initial_capital=self.initial_capital)
-        broker = SimulatedBroker(panel, self.cost_model, self.execution, self.price_mode)
+        broker = SimulatedBroker(panel, self.cost_model, self.execution, self.price_mode,
+                                 max_participation=self.max_participation)
+        structured = bool(getattr(strategy, "preserve_ratios", False))
+        decisions = []
+        held_pairs = []
+        entry_sessions = {}
 
         equity_hist: list[float] = []
         ret_hist: list[float] = []
@@ -305,6 +317,19 @@ class BacktestEngine:
                     quantity = portfolio.quantities.get(action.symbol,0.0)
                     if action.kind == 'split':
                         portfolio.split(action.symbol,action.value)
+                        for plan in held_pairs:
+                            for leg in ('a','b'):
+                                if plan[leg] == action.symbol:
+                                    plan['quantity_'+leg] *= action.value
+                        if pending:
+                            for order in pending['orders']:
+                                if order.symbol == action.symbol and order.target_quantity is not None:
+                                    order.target_quantity *= action.value
+                            if pending.get('fixed_pairs'):
+                                for plan in pending['pairs']:
+                                    for leg in ('a','b'):
+                                        if plan[leg] == action.symbol:
+                                            plan['quantity_'+leg] *= action.value
                         ledger.append(portfolio.snapshot(date,'split',symbol=action.symbol)
                                       | {'ratio':action.value})
                     else:
@@ -325,10 +350,14 @@ class BacktestEngine:
                 ledger.append(portfolio.snapshot(date, "execution_mark"))
                 eq_before = portfolio.equity
                 batch = []
+                pair_plan = None
+                if structured:
+                    pair_plan = reprice_pairs(pending, broker, eq_before, self.risk_manager,
+                                              sector_map, getattr(strategy, 'max_weight', None))
                 for od in pending["orders"]:
                     current_quantity = portfolio.quantities.get(od.symbol, 0.0)
                     price = broker.execution_price(od.symbol, date)
-                    if price is not None and eq_before > 0:
+                    if not structured and not pending.get('mandatory') and price is not None and eq_before > 0:
                         current_weight = current_quantity * price / eq_before
                         delta = od.target_weight - current_weight
                         # The no-trade band retains quantities, never target weights.
@@ -338,8 +367,12 @@ class BacktestEngine:
                             )
                         )):
                             continue
-                    broker.fill(od, eq_before, current_quantity=current_quantity)
+                    if od.status == OrderStatus.PENDING:
+                        broker.fill(od, eq_before, current_quantity=current_quantity)
                     batch.append(od)
+                if structured and any(od.status == OrderStatus.REJECTED or
+                                      od.execution_outcome == 'capacity_limited' for od in batch):
+                    reject_atomic(batch, 'one or more pair-book legs lack executable price/capacity')
                 cash_after_batch = portfolio.cash - sum(
                     od.executed_quantity*od.fill_price+od.cost
                     for od in batch if od.status == OrderStatus.FILLED)
@@ -351,11 +384,21 @@ class BacktestEngine:
                 for od in batch:
                     if od.status == OrderStatus.FILLED:
                         portfolio.apply_fill(od)
+                        after = portfolio.quantities.get(od.symbol,0.)
+                        if after == 0:
+                            entry_sessions.pop(od.symbol,None)
+                        elif od.quantity_before == 0 or after*od.quantity_before < 0:
+                            entry_sessions[od.symbol] = i
                         trading[od.symbol] = trading.get(od.symbol, 0.0) + od.cost
                     ledger.append(portfolio.snapshot(
                         date, "fill" if od.status == OrderStatus.FILLED else "rejected",
                         symbol=od.symbol, quantity=od.executed_quantity, cost=od.cost))
                     orders.append(od)
+                if structured:
+                    if all(o.status == OrderStatus.FILLED for o in batch):
+                        held_pairs = [dict(x) for x in (pair_plan or [])]
+                    ledger.append(portfolio.snapshot(date, 'pair_batch') |
+                                  {'pairs':pair_plan, 'accepted':all(o.status == OrderStatus.FILLED for o in batch)})
                 pending = None
 
             # Only the post-fill quantities earn the remaining move to the close.
@@ -406,12 +449,45 @@ class BacktestEngine:
             trading_rows.append(trading)
             borrow_rows.append(borrowing)
 
-            # 3. On a rebalance date, generate the next target (executes t+1).
-            if date in rb_set and i < len(dates) - 1:
-                tw_raw = raw_weights.loc[date]
-                if tw_raw.isna().all():
+            # Entries/resizing keep their strategy cadence. Risk and explicit
+            # exit policies evaluate each completed session; all fills remain t+1.
+            if i < len(dates) - 1:
+                scheduled = date in rb_set and not raw_weights.loc[date].isna().all()
+                pair_specs = []
+                if scheduled:
+                    tw_raw = raw_weights.loc[date].fillna(0.0)
+                    pair_specs = [dict(x) for x in getattr(strategy,'pair_targets',{}).get(date,[])]
+                else:
+                    tw_raw = portfolio.weights.reindex(close.columns).fillna(0.)
+                    if structured:
+                        current = {(x['a'],x['b'],x['signal']) for x in
+                                   getattr(strategy,'pair_targets',{}).get(date,held_pairs)}
+                        pair_specs = [dict(x) for x in held_pairs
+                                      if (x['a'],x['b'],x['signal']) in current]
+                        tw_raw[:] = 0.
+                        for spec in pair_specs:
+                            for leg in ('a','b'):
+                                sym = spec[leg]
+                                tw_raw[sym] += spec['quantity_'+leg]*closing_marks[sym]/portfolio.equity
+                    elif getattr(strategy,'daily_exits',False):
+                        for sym in portfolio.quantities:
+                            held = i-entry_sessions.get(sym,i)
+                            if hasattr(strategy,'execution_exit'):
+                                exit_now = strategy.execution_exit(sym,date,panel[sym],
+                                    entry_sessions.get(sym,i),i)
+                            else:
+                                exit_now = raw_weights.at[date,sym] == 0 and held >= getattr(strategy,'min_holding_days',0)
+                            if exit_now:
+                                tw_raw[sym] = 0.
+                if scheduled and getattr(strategy,'daily_exits',False) and hasattr(strategy,'execution_exit'):
+                    for sym in portfolio.quantities:
+                        exit_now = strategy.execution_exit(sym,date,panel[sym],entry_sessions.get(sym,i),i)
+                        if exit_now:
+                            tw_raw[sym] = 0.
+                        elif tw_raw[sym] == 0 and i-entry_sessions.get(sym,i) < getattr(strategy,'min_holding_days',0):
+                            tw_raw[sym] = portfolio.weights[sym]
+                if not scheduled and not portfolio.quantities:
                     continue
-                tw_raw = tw_raw.fillna(0.0)
 
                 if self.risk_manager is not None:
                     eq_series = pd.Series(equity_hist, index=dates[: i + 1])
@@ -421,18 +497,38 @@ class BacktestEngine:
                         portfolio_equity=eq_series,
                         strategy_equity=strat_eq,
                         prev_day_return=day_ret,
-                        asset_vols=trailing_vol.loc[date],
+                        asset_vols=trailing_vol.loc[date] if scheduled else None,
                         sector_map=sector_map,
                         market_neutral=market_neutral,
+                        preserve_ratios=structured,
+                        hedged=bool(getattr(strategy,"hedged",False)),
                         allow_leverage_up=allow_leverage_up,
                         strategy_max_weight=getattr(strategy, "max_weight", None),
                         long_only=bool(getattr(strategy, "long_only", False)),
                     )
+                    # Allocation caps apply to new allocations; ordinary price
+                    # drift is not a daily rebalance mandate (Phase 1 convention).
+                    # Daily loss/drawdown controls still act between rebalances.
+                    if not scheduled and not (rstate.kill_switch or rstate.strategy_paused or rstate.derisk_factor < 1):
+                        tw_adj = tw_raw.copy()
                     if rstate.notes:
                         risk_events.append({"date": date, "notes": list(rstate.notes)})
                 else:
                     tw_adj, rstate = tw_raw, RiskState()
 
+                if not scheduled and np.allclose(tw_adj,portfolio.weights.reindex(close.columns).fillna(0.),rtol=0,atol=1e-12):
+                    continue
+                gross_raw = float(tw_raw.abs().sum())
+                risk_scale = float(tw_adj.abs().sum())/gross_raw if gross_raw else 0.
+                for spec in pair_specs:
+                    spec['gross'] *= risk_scale
+                    if not scheduled:
+                        spec['quantity_a'] *= risk_scale
+                        spec['quantity_b'] *= risk_scale
+                decisions.append(dict(date=date, signal=(getattr(strategy,'_signals',None).loc[date].to_dict()
+                    if getattr(strategy,'_signals',None) is not None else None),
+                    intended_target=tw_raw.to_dict(), approved_target=tw_adj.to_dict(), pairs=[dict(x) for x in pair_specs],
+                    reason='scheduled_rebalance' if scheduled else 'daily_exit_or_risk'))
                 exec_date = self.calendar.next_session(date)
                 if exec_date != dates[i+1]:
                     raise ValueError(f'missing next execution session after {date.date()}')
@@ -446,7 +542,9 @@ class BacktestEngine:
                     tw = float(tw_adj.get(sym, 0.0))
                     if not np.isfinite(tw):
                         raise ValueError(f"Non-finite target for {sym} on {date.date()}")
-                    if pw == 0 and tw == 0:
+                    if not scheduled and not structured and abs(pw-tw) < 1e-12:
+                        continue
+                    if pw == 0 and tw == 0 and not any(sym in (x['a'],x['b']) for x in pair_specs):
                         continue
                     new_orders.append(
                         Order(
@@ -455,12 +553,18 @@ class BacktestEngine:
                             execution_date=exec_date,
                             prev_weight=pw,
                             target_weight=tw,
+                            target_quantity=(tw*portfolio.equity/closing_marks[sym]
+                                             if not scheduled and not structured and tw else
+                                             (0. if not scheduled and not structured else None)),
                         )
                     )
                 if new_orders:
                     pending = {
                         "exec_date": exec_date,
                         "orders": new_orders,
+                        "pairs": pair_specs,
+                        "fixed_pairs": not scheduled,
+                        "mandatory": not scheduled or rstate.derisk_factor < 1 or rstate.kill_switch or rstate.strategy_paused,
                     }
 
         equity_curve = pd.Series(equity_hist, index=dates, name="equity")
@@ -498,8 +602,13 @@ class BacktestEngine:
             financing_cost=float(-components_df.financing_cost.sum()),
             pnl_components=components_df,
             sessions=pd.DataFrame(session_rows,index=dates),
+            decisions=decisions,
             config={
                 "execution": self.execution,
+                "max_participation": self.max_participation,
+                "capacity_basis": "decision close raw dollar volume; None is unconstrained research assumption",
+                "structured_execution": "whole-book atomic rejection; common proportional caps" if structured else None,
+                "fill_cost_convention": "observed reference price plus separate cash charges for commission/spread/slippage/impact",
                 "rebalance": freq,
                 "borrow_cost_bps_annual": self.borrow_cost_bps_annual,
                 "price_basis": self.price_mode,

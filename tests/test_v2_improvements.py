@@ -3,7 +3,7 @@
 - RiskManager two-sided volatility targeting (scale up & down, bounded)
 - engine no-trade band (consistency + always allow full exit)
 - S01 turnover reduction vs a no-band / no-min-hold baseline
-- S03 exposure improvement while staying ~dollar-neutral
+- S03 exposure improvement while preserving price-spread hedges
 - benchmark comparison output
 """
 
@@ -116,9 +116,9 @@ def test_s01_still_long_only_after_v2(small_panel):
 
 
 # --------------------------------------------------------------------------- #
-# Phase 3 - S03 exposure up, still dollar-neutral
+# Phase 3 - S03 exposure up, with approved hedge-matched sizing
 # --------------------------------------------------------------------------- #
-def test_s03_target_gross_increases_exposure_and_stays_neutral(panel, sector_map):
+def test_s03_target_gross_increases_exposure_and_preserves_hedges(panel, sector_map):
     rm = RiskManager({})
     base = BacktestEngine(risk_manager=rm, borrow_cost_bps_annual=50.0).run(
         S03PairsMeanReversion({"target_gross": 0.0, "max_active_pairs": 10},
@@ -134,17 +134,24 @@ def test_s03_target_gross_increases_exposure_and_stays_neutral(panel, sector_map
     g_sized = sized.weights.abs().sum(axis=1)
     # Exposure on active days is materially higher with target_gross on.
     assert g_sized[g_sized > 1e-6].mean() > 5 * max(g_base[g_base > 1e-6].mean(), 1e-9)
-    # Still ~dollar-neutral: |net|/gross small on active days.
-    net = sized.weights.sum(axis=1)
-    act = g_sized > 1e-6
-    assert (net[act].abs() / g_sized[act]).mean() < 0.15
+    # Approved Phase 3B replacement: net exposure is constrained, not forced zero.
+    for decision in sized.decisions:
+        if decision['reason'] == 'scheduled_rebalance':
+            rm.validate_final(pd.Series(decision['approved_target']), sector_map=sector_map)
+    for event in sized.ledger:
+        if event['event'] == 'pair_batch' and event['accepted']:
+            for pair in event['pairs']:
+                assert np.isclose(pair['quantity_b'], -pair['beta']*pair['quantity_a'])
     # Genuine long AND short legs remain.
     assert (sized.weights.values > 1e-9).any()
     assert (sized.weights.values < -1e-9).any()
 
 
-def test_s03_market_neutral_flag_set():
-    assert S03PairsMeanReversion({}).market_neutral is True
+def test_s03_hedged_hint_is_separate_from_exact_neutrality():
+    strategy = S03PairsMeanReversion({})
+    assert strategy.hedged is True
+    assert strategy.preserve_ratios is True
+    assert strategy.market_neutral is False
 
 
 # --------------------------------------------------------------------------- #

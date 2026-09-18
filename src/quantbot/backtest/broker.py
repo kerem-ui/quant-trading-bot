@@ -27,6 +27,7 @@ class SimulatedBroker:
         cost_model: EquityCostModel,
         execution: str = "next_open",
         price_mode: str = "adjusted",
+        *, max_participation: float | None = None,
     ):
         if LIVE_TRADING_ENABLED:  # pragma: no cover - safety guard
             raise RuntimeError(
@@ -42,6 +43,20 @@ class SimulatedBroker:
             raise ValueError('price_mode must be adjusted or raw')
         self.price_mode = price_mode
         self._price_col = "open" if execution == "next_open" else "close"
+        if max_participation is not None and (not isfinite(max_participation) or not 0 < max_participation <= 1):
+            raise ValueError('max_participation must be in (0,1] or None')
+        self.max_participation = max_participation
+
+    def liquidity_notional(self, order: Order) -> float | None:
+        """Prior decision close * raw daily volume; known before next execution."""
+        df = self.panel.get(order.symbol)
+        if df is None or order.signal_date not in df.index or not {'close','volume'}.issubset(df.columns):
+            return None
+        close, volume = df.at[order.signal_date,'close'], df.at[order.signal_date,'volume']
+        if any(pd.isna(v) or not isfinite(v) or v <= 0 for v in (close,volume)):
+            return None
+        notional = float(close)*float(volume)
+        return notional if isfinite(notional) else None
 
     def execution_price(self, symbol: str, execution_date: pd.Timestamp) -> float | None:
         """Adjusted open = raw open * adjusted close / raw close; close = adjusted close.
@@ -73,17 +88,42 @@ class SimulatedBroker:
         """
         if order.status != OrderStatus.PENDING:
             raise ValueError("Only a pending order can be filled")
+        if (not isfinite(equity) or equity <= 0 or not isfinite(current_quantity)
+                or not isfinite(order.target_weight)):
+            raise ValueError("Fill sizing requires finite targets/quantities and positive equity")
+        order.quantity_before = current_quantity
+        order.allocation_equity = equity
         price = self.execution_price(order.symbol, order.execution_date)
         if price is None:
             order.status = OrderStatus.REJECTED
             order.note = "no execution price (missing bar / halted)"
+            order.execution_outcome = 'rejected_price'
             return order
-        if (not isfinite(equity) or equity <= 0 or not isfinite(current_quantity)
-                or not isfinite(order.target_weight)):
-            raise ValueError("Fill sizing requires finite targets/quantities and positive equity")
-        quantity = order.target_weight * equity / price - current_quantity
+        desired = order.target_weight*equity/price
+        if order.target_quantity is not None:
+            # Off-cycle reductions never increase held units after an overnight
+            # gap; retain the stricter execution-time allocation or unit bound.
+            desired = min(abs(desired),abs(order.target_quantity))*(1 if order.target_quantity >= 0 else -1)
+            order.target_weight = desired*price/equity
+        quantity = desired-current_quantity
+        order.intended_quantity = quantity
+        liquidity = self.liquidity_notional(order)
+        order.liquidity_notional = liquidity
+        if (self.max_participation is not None or self.cost_model.slippage.impact_coef_bps) and liquidity is None and abs(quantity) > 1e-12:
+            order.status = OrderStatus.REJECTED
+            order.execution_outcome = 'rejected_liquidity'
+            order.note = f'missing/invalid prior-session liquidity: {order.symbol} {order.signal_date.date()}'
+            return order
+        order.execution_outcome = 'fully_executable'
+        if self.max_participation is not None and liquidity is not None:
+            maximum = self.max_participation*liquidity/price
+            if abs(quantity) > maximum:
+                quantity = maximum if quantity > 0 else -maximum
+                order.execution_outcome = 'capacity_limited'
         notional = abs(quantity * price)
-        cost = self.cost_model.cost(notional)
+        participation = notional/liquidity if liquidity else 0.
+        order.cost_components = self.cost_model.components(notional,participation)
+        cost = sum(order.cost_components.values())
         if not isfinite(quantity) or not isfinite(notional) or not isfinite(cost) or cost < 0:
             raise ValueError("Non-finite fill or invalid transaction cost")
         order.executed_quantity = quantity

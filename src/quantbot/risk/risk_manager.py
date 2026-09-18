@@ -184,6 +184,21 @@ class RiskManager:
             raise ValueError("final portfolio violates a hard risk constraint")
 
     # --- orchestration ------------------------------------------------------
+    def proportional_caps(self, weights: pd.Series, *, sector_map=None,
+                          strategy_max_weight=None, market_neutral=False) -> pd.Series:
+        """One common shrink factor for a structured book; never clip a leg."""
+        if not weights.index.is_unique or not np.isfinite(weights.to_numpy()).all():
+            raise ValueError('structured weights must be unique and finite')
+        cap = min(self.max_single, strategy_max_weight) if strategy_max_weight is not None else self.max_single
+        limits = [(weights.abs().max(),cap), (weights.abs().sum(),self.max_gross),
+                  (abs(weights.sum()),0.0 if market_neutral else self.max_net)]
+        limits += [(v,self.max_sector) for v in weights.abs().groupby(self._sectors(weights,sector_map)).sum()]
+        factor = min([1.] + [limit/value for value,limit in limits if value > 0])
+        out = weights*factor
+        self.validate_final(out,sector_map=sector_map,strategy_max_weight=strategy_max_weight,
+                            market_neutral=market_neutral)
+        return out
+
     def process(
         self,
         target_weights: pd.Series,
@@ -199,6 +214,8 @@ class RiskManager:
         market_neutral: bool = False,
         strategy_max_weight: float | None = None,
         long_only: bool = False,
+        preserve_ratios: bool = False,
+        hedged: bool = False,
     ) -> tuple[pd.Series, RiskState]:
         state = RiskState()
         w = target_weights.copy().astype(float).fillna(0.0)
@@ -248,13 +265,19 @@ class RiskManager:
         state.vol_scale = self.volatility_target_scale(
             w, cov, asset_vols,
             allow_leverage_up=allow_leverage_up,
-            market_neutral=market_neutral,
+            market_neutral=market_neutral or hedged,
         )
         if state.derisk_factor < 1:
             state.vol_scale = min(state.vol_scale, 1.0)
         w = w * state.vol_scale
 
         # 5-7. Caps.
+        if preserve_ratios:
+            w = self.proportional_caps(w,sector_map=sector_map,
+                strategy_max_weight=strategy_max_weight,market_neutral=market_neutral)
+            state.gross_exposure = float(w.abs().sum())
+            state.net_exposure = float(w.sum())
+            return w, state
         w = self.apply_position_caps(w)
         if strategy_max_weight is not None:
             w = w.clip(-strategy_max_weight, strategy_max_weight)

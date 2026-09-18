@@ -1,11 +1,12 @@
 """Slippage models.
 
-Slippage is expressed in basis points of traded notional. A fixed component
-captures average spread-crossing; an optional square-root term approximates
-market impact as a function of participation (order size / ADV).
+Slippage is expressed in basis points of traded notional, additional to the
+separately modeled half-spread. An optional existing square-root impact term
+uses order notional / prior decision-session dollar volume in the daily broker.
+It is an explicit scenario assumption, not an empirically calibrated depth curve.
 
-Used as the slippage component of the transaction cost model (composition),
-and also directly by the broker to adjust fill price if desired.
+The daily broker charges these amounts in cash and keeps the observed reference
+price unchanged. It does not also call adjust_fill_price.
 """
 
 from __future__ import annotations
