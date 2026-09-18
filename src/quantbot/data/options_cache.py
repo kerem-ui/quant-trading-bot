@@ -1,4 +1,4 @@
-"""Options chain cache (raw + processed) + metadata.
+"""Legacy normalized CSV chain cache + metadata (not true provider raw).
 
 Layout under ``data/options/``::
 
@@ -6,6 +6,10 @@ Layout under ``data/options/``::
     processed/<underlying>/<YYYY>/<YYYY-MM>.csv.gz
     sample/...
     metadata.json
+
+The historical directory/API name "raw" is retained for compatibility. Its
+contents are already normalized and must not be used as original provider
+payload evidence. No bulk rename or migration is performed.
 
 Storage format is CSV.gz (no extra package dependency). Writes are atomic
 (temp file + rename) and **never silently overwrite** raw files - callers must
@@ -19,6 +23,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,10 +143,12 @@ def list_raw_dates(provider: str, underlying: str,
     out: list[pd.Timestamp] = []
     for p in base.rglob("*.csv.gz"):
         try:
-            out.append(pd.Timestamp(p.stem))
+            match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})(?:\.greeks)?\.csv\.gz", p.name)
+            if match:
+                out.append(pd.Timestamp(match.group(1)))
         except Exception:
             continue
-    return sorted(out)
+    return sorted(set(out))
 
 
 # --------------------------------------------------------------------------- #

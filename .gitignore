@@ -42,3 +42,9 @@ reports/company/
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Optional local analytical storage (production roots must be external)
+/local_data/
+/runs/
+*.duckdb
+*.duckdb.wal

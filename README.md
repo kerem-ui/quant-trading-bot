@@ -1092,6 +1092,13 @@ Markdown/CSV tearsheets, and a pytest suite (**137 tests**).
 - Risk management + drawdown kill switch always in the path.
 - No naked short options anywhere; options structures are defined-risk only.
 
+## Phase 2B analytical data storage
+
+The opt-in Parquet/DuckDB layer uses an external data root and immutable source,
+dataset and run manifests. It leaves existing backtest/archive paths unchanged.
+See [the Phase 2B storage guide](docs/phase2b_data_storage.md) for schemas,
+provenance conventions, configuration and the offline sample command.
+
 ## 3. Setup
 
 ```powershell

@@ -22,6 +22,7 @@ We use Python stdlib ``urllib.request`` only - no new packages.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import os
 import time
 from typing import Any, Iterable
@@ -129,7 +130,7 @@ def normalize_thetadata_eod(
     out["ask"] = df["ask"].astype(float)
     out["mid"] = (out["bid"] + out["ask"]) / 2.0
     out["volume"] = _col(df, "volume", 0).fillna(0).astype("Int64")
-    out["open_interest"] = _col(df, "open_interest", 0).fillna(0).astype("Int64")
+    out["open_interest"] = _col(df, "open_interest").astype("Int64")
     out["implied_volatility"] = iv_src.astype(float)
     for g in ("delta", "gamma", "theta", "vega"):
         out[g] = _col(df, g).astype(float)
@@ -187,7 +188,7 @@ def normalize_thetadata_v3_option_eod(
     out["ask"] = df["ask"].astype(float)
     out["mid"] = (out["bid"] + out["ask"]) / 2.0
     out["volume"] = _col(df, "volume", 0).fillna(0).astype("Int64")
-    out["open_interest"] = _col(df, "open_interest", 0).fillna(0).astype("Int64")
+    out["open_interest"] = _col(df, "open_interest").astype("Int64")
     out["implied_volatility"] = _col(df, "implied_volatility").astype(float)
     for g in ("delta", "gamma", "theta", "vega"):
         out[g] = _col(df, g).astype(float)
@@ -216,7 +217,7 @@ def normalize_thetadata_v3_greeks_eod(
     ``spot_by_date`` is an optional fallback for rows where the row's spot
     is missing or 0.0. Higher-order Greeks (charm, vanna, etc.) and
     ``iv_error`` are dropped to keep the canonical schema lean (they remain
-    in the raw cache).
+    only in an independently preserved provider payload).
     """
     df = (rows.copy() if isinstance(rows, pd.DataFrame)
           else pd.DataFrame(list(rows)))
@@ -247,12 +248,12 @@ def normalize_thetadata_v3_greeks_eod(
     out["ask"] = df["ask"].astype(float)
     out["mid"] = (out["bid"] + out["ask"]) / 2.0
     out["volume"] = _col(df, "volume", 0).fillna(0).astype("Int64")
-    out["open_interest"] = _col(df, "open_interest", 0).fillna(0).astype("Int64")
+    out["open_interest"] = _col(df, "open_interest").astype("Int64")
     # Greeks straight from provider. ThetaData returns implied_vol = 0.0 when
     # the IV solver fails (typically deep-ITM rows where intrinsic ~= mark
     # and IV is indeterminate). Treat provider-zero as missing so the
     # validator warns rather than erroring (iv <= 0 would otherwise be an
-    # error). The provider's iv_error column is preserved in the raw cache.
+    # error). Legacy normalized CSV caches do not retain iv_error.
     iv = _col(df, "implied_vol").astype(float)
     # Mark IV<=0 (solver failure, typically deep-ITM) and IV>5 (numerical
     # wing instability) as missing; both are untrustworthy values that the
@@ -320,6 +321,7 @@ class ThetaDataLoader(OptionsChainLoader):
         timeout_seconds: float = 30.0,
         dry_run: bool = True,
         synthetic_seed: int = 42,
+        source_store=None,
     ):
         # Credentials: never stored except as a private attribute, never logged.
         self._api_key = api_key or os.environ.get(self.DEFAULT_API_KEY_ENV)
@@ -333,6 +335,8 @@ class ThetaDataLoader(OptionsChainLoader):
         self.dry_run = bool(dry_run)
         self._dry = SyntheticOptionsLoader(seed=synthetic_seed)
         self._last_call = 0.0
+        self.source_store = source_store
+        self.source_manifests = []
 
     @property
     def is_local_terminal(self) -> bool:
@@ -392,6 +396,16 @@ class ThetaDataLoader(OptionsChainLoader):
             ) from None
         finally:
             self._last_call = time.monotonic()
+        if self.source_store is not None:
+            endpoint = "/" + path.lstrip("/")
+            if not endpoint.startswith("/" + self.api_version + "/"):
+                endpoint = "/" + self.api_version + endpoint
+            self.source_manifests.append(self.source_store.preserve_source(
+                body if isinstance(body, bytes) else body.encode("utf-8"),
+                provider="thetadata", dataset=path.strip("/").replace("/", "-"),
+                kind="provider_payload", retrieved_at=datetime.now(timezone.utc),
+                request={"endpoint": endpoint, **{k:v for k,v in params.items() if v is not None}},
+            ))
         return json.loads(body)
 
     # ------------------------------------------------------------------ #
