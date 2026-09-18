@@ -1,7 +1,8 @@
-"""Cash and signed adjusted-price units for ETF research accounting.
+"""Cash and signed quantities for ETF research accounting.
 
-Units are not raw broker shares: see docs/phase1a_etf_accounting.md.
-Only executed fills change quantities. Weights and equity are derived marks.
+Adjusted research units remain the default. Raw-share mode requires an explicit
+action book. Only executed fills or validated splits change quantities.
+Weights and equity are derived from marks, never target weights.
 """
 
 from __future__ import annotations
@@ -76,11 +77,25 @@ class Portfolio:
         self.marks[order.symbol] = price
 
     def charge_cost(self, amount: float) -> None:
-        """Deduct a dollar borrowing charge without resizing any position."""
+        """Deduct a dollar borrow/financing charge without resizing positions."""
         if not isfinite(amount) or amount < 0:
             raise ValueError("Cost must be finite and non-negative")
         self.cash -= amount
         self.cumulative_cost += amount
+
+    def cash_flow(self, amount: float) -> None:
+        """Book a signed dividend/interest flow without treating it as a trade."""
+        if not isfinite(amount):
+            raise ValueError('Non-finite cash flow')
+        self.cash += amount
+
+    def split(self, symbol: str, ratio: float) -> None:
+        """Convert held raw shares and their prior mark without changing value."""
+        if not isfinite(ratio) or ratio <= 0:
+            raise ValueError('Split ratio must be finite and positive')
+        if symbol in self.quantities:
+            self.quantities[symbol] *= ratio
+            self.marks[symbol] /= ratio
 
     def snapshot(self, date: pd.Timestamp, event: str, *, symbol: str | None = None,
                  quantity: float = 0.0, cost: float = 0.0) -> dict:

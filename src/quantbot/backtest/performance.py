@@ -109,7 +109,10 @@ def compute_metrics(result, rf: float = 0.0) -> dict:
         "hist_var_95": historical_var(returns, 0.95),
         "hist_es_95": historical_es(returns, 0.95),
         "annual_turnover": float(getattr(result, "annual_turnover", np.nan)),
-        "total_transaction_cost": float(result.total_cost),
+        "total_transaction_cost": float(getattr(result, 'trading_cost', result.total_cost)),
+        "short_borrow_cost": float(getattr(result, 'borrow_cost', 0.0)),
+        "financing_cost": float(getattr(result, 'financing_cost', 0.0)),
+        "total_cost": float(result.total_cost),
         "cost_drag_pct_of_initial": float(
             result.total_cost / result.initial_capital
         ),

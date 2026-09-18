@@ -45,7 +45,23 @@ def contribution_frame(result, panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
     starting_equity = result.equity_curve.shift(1)
     starting_equity.iloc[0] = result.initial_capital
     net_pnl = result.gross_pnl - result.trading_costs - result.borrow_costs
+    if not result.dividends.empty:
+        net_pnl = net_pnl + result.dividends
+    if not result.cash_interest.empty:
+        funding = result.cash_interest - result.financing_costs
+        if funding.ne(0).any():
+            if '__CASH_FINANCING__' in net_pnl:
+                raise ValueError('Reserved cash attribution name conflicts with instrument')
+            net_pnl['__CASH_FINANCING__'] = funding
     return net_pnl.div(starting_equity, axis=0)
+
+
+def _contribution_weights(result, columns):
+    """Add an explicit cash sleeve only when cash P&L is being attributed."""
+    weights = result.weights.reindex(columns=columns).fillna(0.0)
+    if '__CASH_FINANCING__' in columns:
+        weights['__CASH_FINANCING__'] = result.cash / result.equity_curve
+    return weights
 
 
 def _years(idx: pd.Index) -> float:
@@ -58,7 +74,7 @@ def _years(idx: pd.Index) -> float:
 def etf_contribution(result, panel: dict[str, pd.DataFrame]) -> dict:
     """Contribution by ETF, best/worst, yearly, avg weight, turnover by ETF."""
     contrib = contribution_frame(result, panel)
-    w = result.weights.fillna(0.0)[contrib.columns]
+    w = _contribution_weights(result, contrib.columns)
     years = _years(w.index)
 
     by_etf = contrib.sum().sort_values(ascending=False)
@@ -67,7 +83,7 @@ def etf_contribution(result, panel: dict[str, pd.DataFrame]) -> dict:
     held = w.where(w.abs() > 1e-9)
     avg_weight_when_held = held.mean()
     days_held = (w.abs() > 1e-9).sum()
-    turnover_by_etf = (result.turnover_by_symbol.sum() / years).sort_values(ascending=False)
+    turnover_by_etf = (result.turnover_by_symbol.sum() / years).reindex(contrib.columns,fill_value=0).sort_values(ascending=False)
 
     summary = pd.DataFrame({
         "total_contribution": by_etf,
@@ -220,6 +236,7 @@ def risk_analysis(result, panel: dict[str, pd.DataFrame],
     w = result.weights.fillna(0.0)
     contrib = contribution_frame(result, panel)
     cols = contrib.columns
+    w = _contribution_weights(result, cols)
     port = contrib.sum(axis=1)
 
     # Exposure by bucket (mean gross weight per sector).

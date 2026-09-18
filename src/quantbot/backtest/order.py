@@ -35,7 +35,7 @@ class Order:
     fill_price: float | None = None
     cost: float = 0.0
     note: str = ""
-    executed_quantity: float = 0.0  # signed adjusted-price research units
+    executed_quantity: float = 0.0  # signed quantities in the run's declared price basis
     notional: float = 0.0  # absolute executed dollar notional
     quantity_before: float = 0.0
     allocation_equity: float = 0.0  # common pre-cost execution-batch equity

@@ -49,6 +49,8 @@ def build_tearsheet(
         if hasattr(result, "turnover_attribution") else None,
         "cost_attribution": result.cost_attribution()
         if hasattr(result, "cost_attribution") else None,
+        "pnl_components": result.pnl_components.sum()
+        if hasattr(result, 'pnl_components') and not result.pnl_components.empty else None,
     }
     if benchmarks:
         from .benchmark import compare_to_benchmarks
@@ -83,7 +85,8 @@ def tearsheet_to_markdown(ts: dict) -> str:
         "total_return", "cagr", "annual_vol", "sharpe", "sortino",
         "max_drawdown", "max_dd_duration_days", "calmar", "ulcer_index",
         "win_rate", "avg_win", "avg_loss", "hist_var_95", "hist_es_95",
-        "annual_turnover", "total_transaction_cost", "cost_drag_pct_of_initial",
+        "annual_turnover", "total_transaction_cost", "short_borrow_cost", "financing_cost",
+        "total_cost", "cost_drag_pct_of_initial",
         "avg_gross_exposure", "avg_net_exposure", "n_risk_events",
     ]
     for k in key_order:
@@ -148,10 +151,16 @@ def tearsheet_to_markdown(ts: dict) -> str:
             f"| trading total | {ca['trading_cost']:,.0f} |",
             f"| borrow (S03 short leg) | {ca['borrow_cost']:,.0f} "
             f"({ca['borrow_pct_of_total']:.1%} of total) |",
+            f"| cash financing | {ca.get('financing_cost', 0):,.6f} |",
             f"| **total** | **{ca['total_cost']:,.0f}** |",
         ]
 
     bc = ts.get("benchmark_comparison")
+    components = ts.get('pnl_components')
+    if components is not None:
+        lines += ['', '## Reconciled dollar P&L', '', '| Component | $ |', '|---|---:|']
+        lines += [f'| {name} | {amount:,.6f} |' for name,amount in components.items()]
+
     if isinstance(bc, pd.DataFrame) and not bc.empty:
         cols = [
             "strat_sharpe", "bench_sharpe", "excess_cagr", "information_ratio",

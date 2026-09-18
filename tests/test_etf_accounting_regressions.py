@@ -16,6 +16,7 @@ from quantbot.backtest.order import OrderStatus
 from quantbot.costs.slippage import SlippageModel
 from quantbot.costs.transaction_costs import EquityCostModel
 from quantbot.risk.risk_manager import RiskManager
+from quantbot.utils.market_calendar import USMarketCalendar
 
 
 INITIAL_CAPITAL = 1_000.0
@@ -64,7 +65,8 @@ class _RecordingRiskManager(RiskManager):
 
 
 def _panel() -> dict[str, pd.DataFrame]:
-    dates = pd.bdate_range("2024-01-02", periods=65)
+    # Same 65 prices/events and assertions, now on actual exchange sessions.
+    dates = USMarketCalendar().sessions("2024-01-02", "2024-05-01")[:65]
     prices = pd.DataFrame(
         {"open": 100.0, "high": 100.0, "low": 100.0,
          "close": 100.0, "adjusted_close": 100.0, "volume": 1_000_000},

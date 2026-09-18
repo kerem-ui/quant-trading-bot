@@ -26,6 +26,7 @@ class SimulatedBroker:
         panel: dict[str, pd.DataFrame],
         cost_model: EquityCostModel,
         execution: str = "next_open",
+        price_mode: str = "adjusted",
     ):
         if LIVE_TRADING_ENABLED:  # pragma: no cover - safety guard
             raise RuntimeError(
@@ -37,17 +38,24 @@ class SimulatedBroker:
         self.panel = panel
         self.cost_model = cost_model
         self.execution = execution
+        if price_mode not in ('adjusted','raw'):
+            raise ValueError('price_mode must be adjusted or raw')
+        self.price_mode = price_mode
         self._price_col = "open" if execution == "next_open" else "close"
 
     def execution_price(self, symbol: str, execution_date: pd.Timestamp) -> float | None:
         """Adjusted open = raw open * adjusted close / raw close; close = adjusted close.
 
         The factor is a research unit conversion, not an executable raw-share quote.
+        Explicit raw mode uses the supplied unadjusted open/close directly.
         """
         df = self.panel.get(symbol)
         if df is None or execution_date not in df.index:
             return None
         raw_close = df.at[execution_date, "close"]
+        if self.price_mode == 'raw':
+            price = df.at[execution_date, self._price_col]
+            return float(price) if pd.notna(price) and isfinite(price) and price > 0 else None
         adjusted_close = df.at[execution_date, "adjusted_close"]
         raw_price = df.at[execution_date, self._price_col]
         if any(pd.isna(p) or not isfinite(p) or p <= 0

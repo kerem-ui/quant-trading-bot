@@ -21,6 +21,7 @@ import pandas as pd
 
 from ..config import load_data_config, project_root
 from ..utils.logging import get_logger
+from ..utils.market_calendar import USMarketCalendar
 from .validators import validate_panel
 
 log = get_logger("data.loaders")
@@ -108,7 +109,7 @@ def generate_synthetic_panel(
     """
     rng = np.random.default_rng(seed)
     end = end or pd.Timestamp.today().strftime("%Y-%m-%d")
-    dates = pd.bdate_range(start=start, end=end, name="date")
+    dates = USMarketCalendar().sessions(start, end).rename('date')
     n = len(dates)
     if n < 50:
         raise ValueError("synthetic date range too short")
