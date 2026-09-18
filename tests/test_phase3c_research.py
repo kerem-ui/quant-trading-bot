@@ -181,3 +181,23 @@ def test_pair_observation_does_not_change_targets(panel,sector_map):
     cfg={'max_active_pairs':10}
     a=AuditedPairs(cfg,sector_map); b=S03PairsMeanReversion(cfg,sector_map)
     pd.testing.assert_frame_equal(a.target_weights(panel),b.target_weights(panel))
+
+
+def test_complete_freeze_serializes_periods_and_preserves_source(tmp_path,monkeypatch):
+    import quantbot.research.phase3c as module
+    source=tmp_path/'original.csv'
+    source.write_text('date,open,high,low,close,adjusted_close,volume\n2020-01-02,10,11,9,10,10,100\n')
+    checksum=file_digest(source)
+    inv=tmp_path/'inventory.json'; inv.write_text(json.dumps({'files':[{
+        'relative_path':'data/cache/SPY.csv','original_path':str(source),'sha256':checksum,
+        'bytes':source.stat().st_size,'row_count':1,'observed_range':{'start':'2020-01-02','end':'2020-01-02'}}]}))
+    data={'universes':{u:['SPY'] for _,u in module.KEYS.values()},'sector_map':{'SPY':'broad'}}
+    monkeypatch.setattr(module,'load_data_config',lambda:data)
+    monkeypatch.setattr(module.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout='abc'))
+    for filename in ['configs/strategy_configs.json','configs/data_config.example.json','strategy_configs.json','uv.lock','pyproject.toml']:
+        p=tmp_path/filename; p.parent.mkdir(exist_ok=True); p.write_text('{}')
+    frozen=module.prepare(tmp_path,'unit',inv)
+    spec=verify_freeze(frozen)['specification']
+    assert spec['chronological_periods'][0]==['2010-2014','2010-01-01','2014-12-31']
+    assert file_digest(source)==checksum
+    assert file_digest(tmp_path/'runs/phase3c/unit/source_inputs/SPY.csv')==checksum

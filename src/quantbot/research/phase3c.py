@@ -137,7 +137,7 @@ def prepare(repo: Path, freeze_id: str, inventory_path: Path) -> Path:
         scenarios=['trading_0x','base','trading_2x','S03_borrow_0bp','S03_borrow_100bp'],
         research_period='2010-01-04..2026-05-19 previously observed development/research; genuine untouched OOS cannot be established',
         warnings=LIMITATIONS)
-    freeze(destination,spec)
+    freeze(destination,portable(spec))
     print('FROZEN',destination.relative_to(repo),'sources',len(records),'bytes',sum(r['bytes'] for r in records),flush=True)
     return destination
 
