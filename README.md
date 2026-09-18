@@ -1,5 +1,7 @@
 > **Research status:** Performance claims and files under `reports/backtests/` and `reports/core/` are preserved **legacy / non-certified** results. Phase 3C uses separate frozen specifications and reconciled runs; see [the research protocol](docs/phase3c_research_protocol.md) and [Phase 3C results](docs/phase3c_research_report.md). No historical result is proof of alpha or live readiness.
 
+> **S05 current implementation:** Phase 4B adds the explicitly approved, frozen defined-risk short-volatility research strategy. Its dedicated offline runner is separate from generic equity activation flags. See [S05 conventions](docs/phase4b_s05.md) and [bounded results](docs/phase4b_s05_results.md). Historical milestone statements below remain historical.
+
 # quant_trading_bot — Quantitative Trading **Research / Backtesting** Bot
 
 > **Research and backtesting only. This project does NOT trade.**
@@ -23,7 +25,8 @@ into testable, cost-aware, look-ahead-safe backtests.
 | **S03** Pairs / Stat-Arb Mean Reversion | ✅ active | hedge-ratio matched (long+short ETF legs) | weekly | **monthly walk-forward pair reselection**, borrow cost on short leg |
 | **S02** Cross-Sectional Factor Blend | ✅ active | long-only | monthly | price-only factors (v1 limitation) |
 | S04 Carry / Term Structure | ⛔ inactive | — | — | needs futures-chain data (not available v1) |
-| S05–S08 Options vol strategies | ⛔ inactive | — | — | need historical options chains; options *utilities* are built & tested |
+| **S05** Implied-versus-realized volatility | research only | defined-risk short-vol condor | weekly entry / daily exits | frozen Phase 4B rules; one observed SPY trade, QQQ IV history insufficient |
+| S06-S08 Options vol strategies | inactive | - | - | no strategy implementation |
 | S09 Synthetic Arbitrage Scanner | 🔍 scanner only | — | — | flags parity/box/convexity violations; never auto-trades |
 | S10 Tail Hedge Overlay | ⛔ inactive | — | — | risk overlay, not standalone alpha |
 

@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 
 from .spreads import Candidate
+from .risk import RiskDecision
 
 
 class OptionsStrategy(ABC):
@@ -33,3 +34,10 @@ class OptionsStrategy(ABC):
         self, position, chain_today: pd.DataFrame, t: pd.Timestamp,
     ) -> tuple[bool, str]:
         """Return (True, reason) to schedule a close at the next bar."""
+
+    def admit_execution(self, candidate, fill, t, chain_today, portfolio, initial_capital):
+        """Optional stricter strategy checks after actual quotes, before ledger mutation.
+
+        Existing strategies retain their central risk decisions unchanged.
+        """
+        return RiskDecision(True)

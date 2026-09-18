@@ -399,6 +399,17 @@ class OptionsBacktestEngine:
                 ))
                 continue
 
+            # Strategy-specific admission uses the real fill and pre-credit cash.
+            # The default hook preserves all existing strategy behavior.
+            admit = getattr(self.strategy, "admit_execution", None)
+            if admit is not None:
+                decision = admit(cand, fill, t, chain_today,
+                                 self._portfolio_view(), self.initial_capital)
+            if not decision.accepted:
+                self._rejections.append(Rejection(t, "risk", decision.reason,
+                    {"structure": cand.structure_name, "stage": "execution_admission"}))
+                continue
+
             # Build position.
             legs_state: list[BacktestLeg] = []
             for leg, fr in zip(cand.legs, fill.legs):
